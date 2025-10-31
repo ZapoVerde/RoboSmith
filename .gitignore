@@ -1,0 +1,22 @@
+# Dependencies
+/node_modules
+/.pnpm-store
+
+# VS Code / IDX specific
+/.vscode
+/.idx/dev.nix.lock
+
+# Build output
+/out
+/dist
+
+# Logs
+*.log
+npm-debug.log*
+pnpm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# OS-generated files
+.DS_Store
+Thumbs.db
