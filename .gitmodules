@@ -1,0 +1,3 @@
+[submodule "context-slicer"]
+	path = context-slicer
+	url = https://github.com/ZapoVerde/contextSlicer.git

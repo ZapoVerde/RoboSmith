@@ -31,7 +31,7 @@ describe('SecureStorageService', () => {
       delete: vi.fn(),
       onDidChange: vi.fn(),
       // FIX: Add the missing 'keys' method to satisfy the interface shape.
-      keys: vi.fn(), 
+      keys: vi.fn(),
     };
 
     // Instantiate the service with the mock

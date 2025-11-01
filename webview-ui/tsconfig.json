@@ -1,0 +1,22 @@
+/**
+ * @file webview-ui/tsconfig.json
+ * @stamp S-20251101-T122000Z-C-REFACTORED
+ * @architectural-role Configuration
+ * @description Configures TypeScript for the Svelte-based webview UI package. It inherits all base settings from the monorepo's root tsconfig.base.json and adds Svelte-specific configurations.
+ * @core-principles
+ * 1. MUST extend the root `tsconfig.base.json` to ensure monorepo-wide consistency.
+ * 2. OWNS the responsibility of including Svelte-specific types and file paths.
+ * 3. DELEGATES all common compiler options (strictness, aliases) to the base configuration.
+ */
+ {
+  // We are inheriting from two configurations:
+  // 1. `@tsconfig/svelte/tsconfig.json`: Provides the Svelte-specific compiler settings.
+  // 2. `../tsconfig.base.json`: Provides our custom monorepo settings, including the path alias.
+  // By listing our base config second, its settings (like 'paths') will correctly
+  // be applied on top of the Svelte defaults.
+  "extends": ["@tsconfig/svelte/tsconfig.json", "../tsconfig.base.json"],
+
+  // We only need to define what is unique to this package.
+  "include": ["src/**/*.d.ts", "src/**/*.ts", "src/**/*.svelte"],
+  "references": [{ "path": "./tsconfig.node.json" }]
+}

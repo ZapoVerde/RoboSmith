@@ -60,7 +60,6 @@ export class SecureStorageService {
 
   async removeApiKey(keyId: string): Promise<void> {
     const allKeys = await this.getAllApiKeys();
-    // eslint-disable-next-line @typescript-eslint/no-dynamic-delete
     delete allKeys[keyId];
     const updatedJson = JSON.stringify(allKeys, null, 2);
     await this.secretStorage.store(this.KEYCHAIN_SERVICE_NAME, updatedJson);

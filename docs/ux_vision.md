@@ -1,14 +1,16 @@
 ### High-Level UX Vision: Look, Feel, & Flow for RoboForge
 
 #### Core Philosophy: Director's Chair with Auto-Pilot
+
 - **Look**: Clean, VS Code-native sidebar/webview (like a Git panel but for AI chains). Tab headers for multi-tasks (e.g., "Toggle UI Chain | Running"), with a progress bar showing nodes (icons: Blueprint 📐 → Workcard 📝 → Code Gen ⚙️ → Validate ✅). Status labels/icons (e.g., "Clear" for no issues, "Clash" for blocks) in a horizontal row—no clutter. Chat-like log below for helper decisions/outputs, with expandable refs ([file.ts] → click to peek code in editor). Dark/light theme auto-match, minimal colors (greens for go, yellows for caution).
 - **Feel**: Empowering but hands-off—like directing a movie set. Planned work feels linear/auto (pushbutton start, watch it hum), adhoc shifts seamless (e.g., bug uncovers → "Sideline? [Y/N]" prompt, not jarring halts). Control via quick overrides (e.g., "Redo this step" button), with dopamine hits (notifications: "Node complete—3 files forged!"). Hobby pace: 5-10 min steps, no waiting unless clashing (then polite queues).
-- **Flow Principles**: 
+- **Flow Principles**:
   - **Planned (Well-Defined)**: Linear chain—start with spec, auto-advance nodes via helper gates. Feels predictable, like a conveyor belt.
   - **Adhoc/Iterative**: Branch on bugs—helper triggers loops/sidelines, user nudges direction. Shifts smooth (e.g., "Bug found—entering adhoc mode").
   - **Hybrid**: Planned can flip adhoc mid-node (e.g., validation uncovers issue → helper keywords route to troubleshoot loop). Back to planned on resolve.
 
 #### Flow Breakdown: Steps, Nodes, & Helper Gates
+
 Think of the chain as a pipeline: User idea → Nodes (phases like "Plan" or "Code") → Turns (individual AI chats within nodes). Files process one-at-a-time (atomic, full-file loads + hops=2 deps), keeping focus tight.
 
 - **Starting a Chain** (Look/Feel: Pushbutton Simplicity)
@@ -43,14 +45,15 @@ Think of the chain as a pipeline: User idea → Nodes (phases like "Plan" or "Co
 
 ## Tradeoffs
 
-| Area | Good Side | Tricky Side | How We Fix It |
-|------|-----------|-------------|---------------|
-| **Word Count** | One file + connections = short steps. | Extra check adds a bit once. | Short summaries; lighter AI for most. |
-| **Focus** | AI thinks about one file + friends—no overload. | Might miss far connections. | Extra check + plan overlap block. |
-| **Speed** | Steps = quick; info passes easily. | Rare big surprises pause a bit. | Auto-fixes; set limits. |
-| **Safety** | Checks + auto-passes = smooth flow. | Quiet notes might hide small issues. | End summary: "Steps done, surprises fixed." |
+| Area           | Good Side                                       | Tricky Side                          | How We Fix It                               |
+| -------------- | ----------------------------------------------- | ------------------------------------ | ------------------------------------------- |
+| **Word Count** | One file + connections = short steps.           | Extra check adds a bit once.         | Short summaries; lighter AI for most.       |
+| **Focus**      | AI thinks about one file + friends—no overload. | Might miss far connections.          | Extra check + plan overlap block.           |
+| **Speed**      | Steps = quick; info passes easily.              | Rare big surprises pause a bit.      | Auto-fixes; set limits.                     |
+| **Safety**     | Checks + auto-passes = smooth flow.             | Quiet notes might hide small issues. | End summary: "Steps done, surprises fixed." |
 
 ## Tips and Settings
+
 - **If Something Goes Wrong**: File pull fails? Use just the main file + note ("Short version—check manually?"). Show warning on screen.
 - **Custom Options**: In settings: `connection_levels: 2` (how many friend files), `step_limit: 3` (turns per file), `surprise_limit: 5` (when to ask for help).
 - **Testing**: Practice: Fake pulls for groups of steps; test surprise (+3 files) → auto-fix notes.
@@ -61,18 +64,21 @@ This setup makes context feel easy—like giving the AI a quick notebook page in
 Let's pull this into focus—abstracting to a "director's dashboard" vibe where you steer the AI crew without micromanaging. I'll propose a cohesive look (visuals/UI), feel (control/emotion), and flow (planned vs. adhoc, with helper gates as the smart linker). This builds on your two work types (planned = structured auto-run, adhoc = flexible loops), with seamless shifts on bugs (e.g., "planned node uncovers issue → helper redirects to adhoc turns"). Helper bot as "stage manager": Reviews outputs, outputs keywords (PROCEED, REDO:[feedback], SIDELINE:[issue], HALT:[help needed]) to trigger next programmatically—user overrides if needed. No doc updates yet; just brainstorming.
 
 #### Look: Clean, Glanceable Dashboard in VS Code
+
 - **Core Interface**: Sidebar webview (like GitLens but for AI chains)—top: Tab strip for multi-chains ("UI Toggle | Running", "Auth Fix | Adhoc"). Middle: Progress timeline (nodes as icons: Plan 📐 → Code ⚙️ → Validate ✅, with file icons underneath for current focus). Bottom: Chat log for helper decisions/outputs (scrollable, expandable refs like "[toggle.ts] → click to open editor").
 - **Visual Style**: Minimalist—dark/light auto, greens for progress, yellows for cautions (e.g., "REDO pending"). Status row per tab: Health stoplight (🟢 safe), Overlap label ("Clear" or "Clash"), Queue icon (⏳ wait). No overload—labels/icons horizontal, tooltips for depth ("Clash: File X in Tab Y").
 - **Adhoc Shift Look**: On bug, timeline "branches" visually (e.g., sideline loop as a side bubble: "Troubleshoot: Issue Y"). Chat highlights keywords in bold (e.g., "Helper: REDO: Fix lint error").
 - **Mobile/Remote Feel**: Via vscode.dev tunnel, looks like a web app—touch-friendly buttons for "Override Helper" or "Halt Now".
 
 #### Feel: Empowering Director with Smart Auto-Pilot
+
 - **Overall Vibe**: You feel like a film director—AI as actors following script (planned) or improvising under guidance (adhoc). Control is "light touch": Push start, watch auto-flow, intervene only on helper escalations (e.g., 90% PROCEED auto, 10% prompts like "REDO? [Y/N/Feedback]"). Shifts feel natural (bug → "Entering debug mode—sideline?"), not jarring. Dopamine: Notifications ("Node done—5 files forged!") + confetti on chain complete.
 - **Planned Work Feel**: Predictable/satisfying—like a train on tracks. Auto-advances (helper: PROCEED → next node), minimal input (e.g., initial spec upload).
 - **Adhoc/Iterative Feel**: Flexible/exploratory—like tweaking a sketch. More loops (REDO/SIDELINE triggers), with user nudges ("Add feedback: [text box]"). Bugs shift smoothly: "Issue found—helper SIDELINE: Troubleshoot loop started."
 - **Control Levels**: Buttons for overrides ("Force PROCEED", "Switch to Adhoc"). Config slider: "Auto-Level" (High: Minimal prompts; Low: Gate every turn). Feels safe—halts rare, but "HALT: [details]" pings you directly (notification: "Need your call on Z").
 
 #### Flow: Planned to Adhoc, with Helper Links
+
 Flow as a pipeline: User idea → Nodes (phases like Plan, Code) → Turns (AI chats within nodes). Files atomic (one/turn, full + hops=2). Helper reviews every output, keywords trigger next (programmatic if/then in code). Planned = linear, adhoc = branching loops; shifts on bugs (helper flags → redirect).
 
 - **Starting a Chain**:

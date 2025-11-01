@@ -17,15 +17,16 @@ This setup lets the AI focus on one small task at a time, like "update this one 
 ## How It Works
 
 ### 1. The Three Types of Context
+
 Context loads at the start of each group of steps (node) and refreshes for every single step (turn). It combines the three types in this order: Permanent first (always), then secondary (if needed for the node), then primary (from the last step).
 
 - **Permanent Context (Always Loaded)**: This is the foundation—things like the project's main description or overall design rules. It comes from text files in a "docs" folder. Only the key parts are included (short summaries). Example: "Remember the project is a game app: [short goal description]."
-  
 - **Secondary Context (Loaded for a Node)**: This is rules that fit the current group of steps. For example, during code writing, load "use clean variable names" rules. It's the same for all steps in that group but switches for the next group. Only added if it matches the task.
 
 - **Primary Context (Chat Box Updates)**: This is the running notes from the conversation, like "last step fixed an error in [file.ts]." It's kept very short—just references to saved files and quick summaries. It changes after every step and carries over to the next one.
 
 ### 2. Pulling in File Details
+
 For each step working on a file, the system pulls the full file plus a few directly connected ones (up to 2 levels away). No partial pieces—always whole files, but kept small.
 
 - **When It Happens**: Before each step starts.
@@ -40,6 +41,7 @@ Files are handled one at a time, in order from the plan. The connected files mak
 **On-Screen Note**: A side panel shows "Loaded: [main file + 2 connections]."
 
 ### 3. Passing Info Between Steps and Groups
+
 Info moves forward as short notes or file references—no long copies. After each step, changes save to the project folder, and the chat just points to them.
 
 - **Within a Step (Turn)**:
@@ -55,27 +57,29 @@ Info moves forward as short notes or file references—no long copies. After eac
 **Keeping It Short**: Save real changes as full files. Chat uses pointers like "[file.ts]" + quick notes. After each step, drop old details—keep just the new summary.
 
 ### 4. What Workers Get
+
 Each AI worker (like the code writer or checker) gets a custom mix for its job:
 
-| Worker Type | What It Gets | Example |
-|-------------|--------------|---------|
+| Worker Type               | What It Gets                                          | Example                                                                                                    |
+| ------------------------- | ----------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
 | **Writer (Creates Code)** | Main file + connected files + plan note + code rules. | "Write for [toggle.ts + connected files] using [store connection]. Follow clean code rules: [short list]." |
-| **Checker (Reviews)** | Saved file + connected files + review rules. | "Check [toggle.ts pointer] for errors. Use check rules: [short list]." |
-| **Fixer (Updates)** | Saved file + connected files + last note + fix rules. | "Fix errors in [toggle.ts updated] + [connected files]. Last note: [quick summary]." |
-| **OK Checker** | All notes from the group + finish rules. | "Is [3 file notes] ready? Use final check rules: [short list]." |
+| **Checker (Reviews)**     | Saved file + connected files + review rules.          | "Check [toggle.ts pointer] for errors. Use check rules: [short list]."                                     |
+| **Fixer (Updates)**       | Saved file + connected files + last note + fix rules. | "Fix errors in [toggle.ts updated] + [connected files]. Last note: [quick summary]."                       |
+| **OK Checker**            | All notes from the group + finish rules.              | "Is [3 file notes] ready? Use final check rules: [short list]."                                            |
 
 Everything is full small files—no partial pieces.
 
 ## Tradeoffs
 
-| Area | Good Side | Tricky Side | How We Fix It |
-|------|-----------|-------------|---------------|
-| **Word Count** | One file + close connections = short steps. | Extra check adds a bit once. | Short summaries; use lighter AI for most. |
-| **Focus** | AI thinks about one file + friends—no overload. | Might miss far connections. | Quick extra check + plan overlap block. |
-| **Speed** | Steps = quick; info passes easily. | Rare big surprises pause a bit. | Auto-fixes; set limits. |
-| **Safety** | Checks + auto-passes = smooth flow. | Quiet notes might hide small issues. | End summary: "Steps done, surprises fixed." |
+| Area           | Good Side                                       | Tricky Side                          | How We Fix It                               |
+| -------------- | ----------------------------------------------- | ------------------------------------ | ------------------------------------------- |
+| **Word Count** | One file + close connections = short steps.     | Extra check adds a bit once.         | Short summaries; use lighter AI for most.   |
+| **Focus**      | AI thinks about one file + friends—no overload. | Might miss far connections.          | Quick extra check + plan overlap block.     |
+| **Speed**      | Steps = quick; info passes easily.              | Rare big surprises pause a bit.      | Auto-fixes; set limits.                     |
+| **Safety**     | Checks + auto-passes = smooth flow.             | Quiet notes might hide small issues. | End summary: "Steps done, surprises fixed." |
 
 ## Tips and Settings
+
 - **If Something Goes Wrong**: File pull fails? Use just the main file + note ("Short version—check manually?"). Show warning on screen.
 - **Custom Options**: In settings: `connection_levels: 2` (how many friend files), `step_limit: 3` (turns per file), `surprise_limit: 5` (when to ask for help).
 - **Testing**: Practice: Fake pulls for groups of steps; test surprise (+3 files) → auto-fix notes.

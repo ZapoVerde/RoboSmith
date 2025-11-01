@@ -2,7 +2,7 @@ This is a crucial question that defines the foundational quality of the project.
 
 The most robust and architecturally sound method is to **treat the AiAnvil logic as a design reference, not as source code to be copied.**
 
-We will filter it through the "coder" (us) to **preserve the original, proven *intent* and then reimplement it from scratch** to be a first-class, fully compliant citizen of the new architecture.
+We will filter it through the "coder" (us) to **preserve the original, proven _intent_ and then reimplement it from scratch** to be a first-class, fully compliant citizen of the new architecture.
 
 Pasting the code directly is forbidden. It would violate nearly every standard we have just established.
 
@@ -34,8 +34,9 @@ We will determine the canonical home for this piece of functionality within the 
 
 **Step 3: Define the New Contract**
 Before writing any implementation, we will first define the new file's contract. This includes:
-*   The full, compliant file preamble (`@architectural-role`, `@core-principles`).
-*   The public API, defined as strict TypeScript interfaces and function signatures.
+
+- The full, compliant file preamble (`@architectural-role`, `@core-principles`).
+- The public API, defined as strict TypeScript interfaces and function signatures.
 
 **Step 4: Reimplement with Full Compliance**
 With your approval of the contract, I will then write the internal logic for the functions. The original AiAnvil code will serve as a trusted reference for the algorithm itself, but the code I produce will be written from scratch to be 100% compliant with our new standards.

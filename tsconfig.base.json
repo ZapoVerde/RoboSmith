@@ -1,0 +1,38 @@
+/**
+ * @file tsconfig.base.json
+ * @stamp S-20251101-T121500Z-C-INITIAL
+ * @architectural-role Configuration
+ * @description The single, authoritative source of truth for shared TypeScript compiler options for the entire monorepo. It establishes strictness rules and defines the canonical path aliases used by all packages.
+ * @core-principles
+ * 1. IS the foundational configuration that all other tsconfig.json files MUST extend.
+ * 2. OWNS the definition of all monorepo-wide path aliases (e.g., "@shared").
+ * 3. ENFORCES a consistent, strict baseline for TypeScript across the project.
+ */
+ {
+    "compilerOptions": {
+      // --- Module & Output Settings ---
+      "target": "ESNext",
+      "module": "ESNext",
+      "moduleResolution": "bundler", // The modern standard for tools like Vite and Node.js ESM.
+      "resolveJsonModule": true,     // Allows importing JSON files as modules.
+  
+      // --- Strictness & Type Safety ---
+      "strict": true,                   // Enables all strict type-checking options. This is non-negotiable.
+      "forceConsistentCasingInFileNames": true, // Prevents case-sensitivity issues between file systems.
+      "esModuleInterop": true,          // Ensures compatibility between CommonJS and ES modules.
+      "skipLibCheck": true,             // Speeds up compilation by not type-checking library declaration files.
+      "useDefineForClassFields": true,  // Enforces modern class field declaration behavior.
+  
+      // --- PATH ALIAS CONFIGURATION ---
+      // This is the foundation for our aliases. It tells TypeScript that the root
+      // of our path mapping is the current directory (the project root).
+      "baseUrl": ".",
+      // This 'paths' object defines the actual aliases. It maps a pattern (the key)
+      // to a physical location on disk (the value in the array).
+      "paths": {
+        // Any import starting with "@shared/" will now be resolved by looking
+        // inside the "packages/shared/src/" directory.
+        "@shared/*": ["packages/shared/src/*"]
+      }
+    }
+  }
