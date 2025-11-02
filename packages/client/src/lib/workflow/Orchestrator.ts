@@ -1,45 +1,20 @@
 /**
  * @file packages/client/src/lib/workflow/Orchestrator.ts
- * @stamp S-20251101T211500Z-C-CALLBACK-INTEGRATED
+ * @stamp S-20251102-T124500Z-C-FINAL-ENGINE
  * @architectural-role Orchestrator
- * @description
- * The central, deterministic state machine for the RoboSmith Factory. It consumes
- * a valid `WorkflowManifest` and executes the defined nodes and steps with
- * perfect fidelity. It now includes a callback mechanism to provide real-time
- * state updates to its supervisor (the EventHandler).
+ * @description The definitive, manifest-driven workflow engine. It translates the declarative `workflows.json` into a series of state transitions, acting as the deterministic core of the RoboSmith "Factory."
  * @core-principles
- * 1. IS the central state machine for all automated workflows.
- * 2. OWNS the `NodeExecutionContext`, managing the in-memory "scratchpad" for each node.
- * 3. MUST execute the manifest's instructions without deviation.
- * 4. DELEGATES all I/O and provides state feedback via injected services and callbacks.
- *
- * @api-declaration
- *   - export class Orchestrator
- *   -   constructor(manifest, contextService, apiManager, onStateUpdate?)
- *   -   public async executeNode(nodeId: string): Promise<Record<string, string>>
- *
- * @contract
- *   assertions:
- *     - purity: "mutates"       # Manages the state of the NodeExecutionContext.
- *     - external_io: "none"     # Delegates all I/O to injected services, making it easy to test.
- *     - state_ownership: "['NodeExecutionContext']" # Owns the runtime state of a node execution.
+ * 1. IS a deterministic state machine, not a speculative agent.
+ * 2. OWNS the primary execution loop: Assemble Context -> Execute Block -> Lookup Transition -> Execute Action.
+ * 3. MUST faithfully execute the manifest's control flow.
+ * 4. DELEGATES all I/O and AI calls to specialized services.
  */
 
-import type { PlanningState } from '../../shared/types';
-import type { WorkflowManifest, StepDefinition,  } from './WorkflowService';
-import type { ContextPartitionerService } from '../context/ContextPartitionerService';
 import type { ApiPoolManager, WorkOrder } from '../ai/ApiPoolManager';
+import type { ContextPartitionerService } from '../context/ContextPartitionerService';
+import type { PlanningState, WorkflowManifest, ExecutionPayload, BlockDefinition, NodeDefinition } from '../../shared/types';
 import { logger } from '../logging/logger';
 
-/**
- * The in-memory state managed by the Orchestrator for a single node's execution.
- */
-interface NodeExecutionContext {
-  memory: Record<string, string>;
-  currentStepIndex: number;
-}
-
-/** Custom error thrown when a workflow is intentionally halted by a HALT_AND_FLAG action. */
 export class WorkflowHaltedError extends Error {
   constructor(message: string) {
     super(message);
@@ -48,129 +23,106 @@ export class WorkflowHaltedError extends Error {
 }
 
 export class Orchestrator {
-  private onStateUpdate?: (state: PlanningState) => void;
+  private manifest: WorkflowManifest;
+  private contextService: ContextPartitionerService;
+  private apiManager: ApiPoolManager;
+  private onStateUpdate: (state: PlanningState) => void;
+
+  // Runtime state
+  private currentNodeId: string | null = null;
+  private currentBlockId: string | null = null;
+  private executionPayload: ExecutionPayload = [];
 
   constructor(
-    private manifest: WorkflowManifest,
-    private contextService: ContextPartitionerService,
-    private apiManager: ApiPoolManager,
-    onStateUpdate?: (state: PlanningState) => void
+    manifest: WorkflowManifest,
+    contextService: ContextPartitionerService,
+    apiManager: ApiPoolManager,
+    onStateUpdate: (state: PlanningState) => void
   ) {
+    this.manifest = manifest;
+    this.contextService = contextService;
+    this.apiManager = apiManager;
     this.onStateUpdate = onStateUpdate;
   }
 
-  public async executeNode(nodeId: string): Promise<Record<string, string>> {
-    const nodeDef = this.manifest.nodes[nodeId];
+  public async executeNode(nodeId: string): Promise<void> {
+    const startNode = this.manifest[nodeId];
+    if (!startNode) {
+      throw new Error(`Start node "${nodeId}" not found in the manifest.`);
+    }
+
+    this.currentNodeId = nodeId;
+    this.currentBlockId = startNode.entry_block;
+    this.executionPayload = [];
+
+    logger.info('Orchestrator execution started.', { nodeId });
+
+    while (this.currentBlockId) {
+      this.currentBlockId = await this.executeBlock(this.currentBlockId);
+    }
+
+    logger.info('Orchestrator execution finished.', { nodeId });
+  }
+
+  private async executeBlock(blockId: string): Promise<string | null> {
+    const { blockDef } = this.getBlockAndNodeDefs(blockId);
+    logger.debug(`Executing block: ${blockId}`);
+
+    // --- 1. Assemble Context (Placeholder) ---
+    const assembledContext = this.executionPayload;
+
+    // --- 2. Execute Worker (Full Implementation) ---
+    const workOrder: WorkOrder = {
+      worker: blockDef.worker, // Correct property name is 'worker'
+      context: assembledContext,
+  };
+    const workerOutput = await this.apiManager.execute(workOrder);
+    this.executionPayload = workerOutput.newPayload;
+
+    // --- 3. Lookup Transition ---
+    const signal = workerOutput.signal;
+    const transition = blockDef.transitions.find(t => t.on_signal === signal);
+
+    if (!transition) {
+      logger.debug(`No transition for signal "${signal}". Terminating.`);
+      return null;
+    }
+
+    // --- 4. Execute Action ---
+    const separatorIndex = transition.action.indexOf(':');
+    if (separatorIndex === -1) {
+      throw new Error(`Invalid action format: ${transition.action}`);
+    }
+    const actionType = transition.action.slice(0, separatorIndex);
+    const targetId = transition.action.slice(separatorIndex + 1);
+
+    switch (actionType) {
+      case 'JUMP':
+        logger.debug(`Jumping to block: ${targetId}`);
+        return targetId;
+      
+      default:
+        throw new Error(`Unknown action type "${actionType}"`);
+    }
+  }
+
+  private getBlockAndNodeDefs(blockId: string): { blockDef: BlockDefinition; nodeDef: NodeDefinition } {
+    const [nodeId, blockName] = blockId.split('__');
+    if (!nodeId || !blockName) {
+      throw new Error(`Fatal: Invalid Block ID format: ${blockId}`);
+    }
+
+    const nodeDef = this.manifest[nodeId];
     if (!nodeDef) {
-      throw new Error(`Orchestrator error: Node with ID "${nodeId}" not found in manifest.`);
+      throw new Error(`Fatal: Could not find node definition for ID: ${nodeId}`);
     }
 
-    const context: NodeExecutionContext = {
-      memory: {},
-      currentStepIndex: 0,
-    };
-
-    while (context.currentStepIndex < nodeDef.steps.length) {
-      // Report the state at the beginning of each step's execution.
-      this.onStateUpdate?.(this.buildPlanningState(nodeId, nodeDef.steps, context));
-
-      const step = nodeDef.steps[context.currentStepIndex];
-      logger.info(`Executing step: "${step.name}" in node: "${nodeId}"`);
-
-      const contextPackage = await this.contextService.getContext({
-        filePath: './placeholder.ts',
-        sliceName: step.contextSlice,
-      });
-
-      const renderedPrompt = this.renderPrompt(step.prompt, context.memory);
-      const fullPrompt = `${renderedPrompt}\n\n---\nContext:\n${contextPackage}`;
-
-      const workerDef = this.manifest.workers[step.worker];
-      if (!workerDef) {
-        throw new Error(`Orchestrator error: Worker "${step.worker}" not found in manifest.`);
-      }
-
-      const workOrder: WorkOrder = { provider: workerDef.provider, prompt: fullPrompt };
-      const aiResponse = await this.apiManager.execute(workOrder);
-      context.memory[step.name] = aiResponse;
-
-      const validationPassed = this.validateResponse(aiResponse, step);
-      const action = validationPassed ? step.actions.onSuccess : step.actions.onFailure;
-
-      switch (action.type) {
-        case 'PROCEED_TO_NEXT_STEP':
-          context.currentStepIndex++;
-          break;
-        case 'HALT_AND_FLAG': {
-          logger.error(`Workflow halted by action: ${action.message}`);
-          this.onStateUpdate?.(
-            this.buildPlanningState(nodeId, nodeDef.steps, context, true, action.message)
-          );
-          throw new WorkflowHaltedError(action.message);
-        }
-        case 'JUMP_TO_NODE':
-          logger.info(`Jumping to node: ${action.nodeId}`);
-          return this.executeNode(action.nodeId);
-        default: {
-          const exhaustiveCheck: never = action;
-          throw new Error(`Orchestrator error: Unknown action type encountered: ${exhaustiveCheck}`);
-        }
-      }
+    const blockDef = nodeDef.blocks[blockName];
+    if (!blockDef) {
+      throw new Error(`Fatal: Could not find block definition for ID: ${blockId}`);
     }
-
-    logger.info(`Node "${nodeId}" completed successfully.`);
-    // Report the final success state.
-    this.onStateUpdate?.(this.buildPlanningState(nodeId, nodeDef.steps, context));
-    return context.memory;
-  }
-
-  /**
-   * Constructs a PlanningState snapshot based on the current execution context.
-   */
-  private buildPlanningState(
-    nodeId: string,
-    steps: StepDefinition[],
-    context: NodeExecutionContext,
-    isHalted = false,
-    errorMessage: string | null = null
-  ): PlanningState {
-    const lastStepName =
-      context.currentStepIndex > 0 ? steps[context.currentStepIndex - 1].name : null;
-    const lastOutput = lastStepName ? context.memory[lastStepName] : null;
-
-    return {
-      nodeId,
-      currentStepIndex: context.currentStepIndex,
-      steps: steps.map((step, index) => {
-        let status: PlanningState['steps'][0]['status'] = 'pending';
-        if (index < context.currentStepIndex) {
-          status = 'complete';
-        } else if (index === context.currentStepIndex) {
-          status = isHalted ? 'action_required' : 'in_progress';
-        }
-        return { name: step.name, status };
-      }),
-      lastOutput,
-      isHalted,
-      errorMessage,
-    };
-  }
-
-  private renderPrompt(template: string, memory: Record<string, string>): string {
-    return template.replace(/\$\{([^}]+)\}/g, (_match, key) => {
-      return memory[key] ?? '';
-    });
-  }
-
-  private validateResponse(response: string, step: StepDefinition): boolean {
-    const rule = step.validation;
-    switch (rule.type) {
-      case 'keywordSignal':
-        return response.toLowerCase().includes(rule.signal.toLowerCase());
-      default: {
-        logger.error(`Invalid validation rule type: '${rule.type}' in step '${step.name}'`);
-        return false;
-      }
-    }
+    
+    this.currentNodeId = nodeId;
+    return { blockDef, nodeDef };
   }
 }

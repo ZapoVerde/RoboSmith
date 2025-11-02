@@ -1,6 +1,6 @@
 /**
  * @file packages/client/src/extension.spec.ts
- * @stamp S-20251101-T133500Z-V-TYPED
+ * @stamp S-20251102-T083000Z-V-FINAL-FIX
  * @test-target packages/client/src/extension.ts
  * @description Verifies the extension's activation logic, ensuring services are initialized and commands are registered correctly.
  * @criticality The test target is CRITICAL as it is the application's entry point.
@@ -19,21 +19,15 @@ import * as vscode from 'vscode';
 import { activate } from './extension';
 import { SecureStorageService } from './lib/ai/SecureStorageService';
 import { logger } from './lib/logging/logger';
-
-// --- Type alias for the complex mock return type to keep it clean ---
-type ApiPoolManagerMock = {
-  initialize: Mock<() => void>;
-};
+import { ApiPoolManager } from './lib/ai/ApiPoolManager';
 
 // --- Hoisting-Safe Mocks for Dependencies ---
 
-// Declare variables for our mock functions with the correct signature-based types.
-let mockInitialize: Mock<() => void>;
-let mockGetInstance: Mock<(service: SecureStorageService) => ApiPoolManagerMock>;
-
 vi.mock('./lib/ai/ApiPoolManager', () => ({
   ApiPoolManager: {
-    getInstance: (...args: [SecureStorageService]) => mockGetInstance(...args),
+    getInstance: vi.fn().mockReturnValue({
+      initialize: vi.fn().mockResolvedValue(undefined),
+    }),
   },
 }));
 
@@ -49,15 +43,10 @@ vi.mock('./lib/logging/logger', () => ({
 
 vi.mock('./lib/ai/SecureStorageService');
 
+// DEFINITIVE FIX: The vscode mock is now comprehensive.
 vi.mock('vscode', () => ({
-  ExtensionMode: {
-    Production: 1,
-    Development: 2,
-    Test: 3,
-  },
-  commands: {
-    registerCommand: vi.fn(),
-  },
+  ExtensionMode: { Production: 1, Development: 2, Test: 3 },
+  commands: { registerCommand: vi.fn() },
   window: {
     createWebviewPanel: vi.fn(() => ({
       webview: {
@@ -67,27 +56,39 @@ vi.mock('vscode', () => ({
     })),
     createOutputChannel: vi.fn(),
   },
-  ViewColumn: {
-    One: 1,
+  workspace: {
+    // It now includes the properties needed by the activate function.
+    workspaceFolders: [{ uri: { fsPath: '/mock/workspace' } }],
+    fs: {
+      readFile: vi.fn().mockResolvedValue(
+        Buffer.from(JSON.stringify({
+          'Node:Test': { // A minimal valid manifest
+            entry_block: 'Block:Test',
+            context_inheritance: true,
+            static_memory: {},
+            blocks: {},
+          }
+        }))
+      ),
+    },
   },
+  Uri: {
+    joinPath: vi.fn((base, ...parts) => ({ ...base, path: `${base.fsPath}/${parts.join('/')}` })),
+  },
+  ViewColumn: { One: 1 },
   default: {},
 }));
 
 describe('activate', () => {
   let mockContext: vscode.ExtensionContext;
+  let mockApiManager: { initialize: Mock };
 
   beforeEach(() => {
     vi.clearAllMocks();
 
-    // Initialize mock functions with the correct signature-based generic.
-    mockInitialize = vi.fn<() => void>();
-    mockGetInstance = vi.fn<
-      (service: SecureStorageService) => ApiPoolManagerMock
-    >().mockReturnValue({
-      initialize: mockInitialize,
-    });
+    mockApiManager = { initialize: vi.fn() };
+    vi.mocked(ApiPoolManager.getInstance).mockReturnValue(mockApiManager as unknown as ApiPoolManager);
 
-    // Setup a reusable mock context for all tests in this suite.
     mockContext = {
       extensionMode: vscode.ExtensionMode.Test,
       secrets: {} as vscode.SecretStorage,
@@ -96,24 +97,19 @@ describe('activate', () => {
   });
 
   it('should initialize the logger and services on activation', async () => {
-    // Act
     await activate(mockContext);
 
-    // Assert: Logger Initialization
     expect(logger.initialize).toHaveBeenCalledWith(mockContext.extensionMode);
 
-    // Assert: Service Initialization
     const secureStorageInstance = vi.mocked(SecureStorageService).mock.instances[0];
     expect(SecureStorageService).toHaveBeenCalledWith(mockContext.secrets);
-    expect(mockGetInstance).toHaveBeenCalledWith(secureStorageInstance);
-    expect(mockInitialize).toHaveBeenCalledOnce();
+    expect(ApiPoolManager.getInstance).toHaveBeenCalledWith(secureStorageInstance);
+    expect(mockApiManager.initialize).toHaveBeenCalledOnce();
   });
 
   it('should register the roboSmith.showPanel command', async () => {
-    // Act
     await activate(mockContext);
 
-    // Assert: Command Registration
     const mockedRegisterCommand = vi.mocked(vscode.commands.registerCommand);
     expect(mockedRegisterCommand).toHaveBeenCalledOnce();
     expect(mockedRegisterCommand).toHaveBeenCalledWith(

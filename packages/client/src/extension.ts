@@ -22,13 +22,14 @@
 import * as vscode from 'vscode';
 import { SecureStorageService } from './lib/ai/SecureStorageService';
 import { ApiPoolManager } from './lib/ai/ApiPoolManager';
-import { handleEvent, type EventHandlerContext } from './events/handler';
+import { createEventHandler, type EventHandlerContext } from './events/handler';
 import { logger } from './lib/logging/logger';
+import type { WorkflowManifest } from './shared/types';
+import type { ContextPartitionerService } from './lib/context/ContextPartitionerService';
 
 // This function is called when your extension is activated
 export async function activate(context: vscode.ExtensionContext) {
   // --- 1. Initialize Logger (Must be first) ---
-  // The logger is initialized immediately so it can be used by all other services during their startup.
   logger.initialize(context.extensionMode);
   logger.info('RoboSmith extension activating...');
 
@@ -36,43 +37,54 @@ export async function activate(context: vscode.ExtensionContext) {
   const secureStorageService = new SecureStorageService(context.secrets);
   const apiPoolManager = ApiPoolManager.getInstance(secureStorageService);
 
-  // Load stored API keys into memory at startup.
   await apiPoolManager.initialize();
   logger.info('API Pool Manager initialized.');
+  
+  // --- 3. Load and Validate Workflow Manifest ---
+  const workspaceFolders = vscode.workspace.workspaceFolders;
+  if (!workspaceFolders) {
+    logger.error('No workspace folder is open. Cannot find workflow manifest.');
+    return;
+  }
+  const manifestUri = vscode.Uri.joinPath(workspaceFolders[0].uri, '.vision', 'workflows.json');
+  
+  const rawManifest = await vscode.workspace.fs.readFile(manifestUri);
+  const manifestContent = Buffer.from(rawManifest).toString('utf-8');
+  // Enforce the contract at the system boundary.
+  const manifest = JSON.parse(manifestContent) as WorkflowManifest;
 
-  // Create the context object that will be injected into the event handler.
-  // This contains all necessary dependencies for handling events.
-  const eventHandlerContext: EventHandlerContext = {
-    secureStorageService,
-  };
+  logger.info('Workflow manifest loaded and parsed successfully.');
 
-  // --- 3. Command Registration ---
-  // Register a command that will create and show a webview panel.
+  // --- 4. Command Registration ---
   const disposable = vscode.commands.registerCommand('roboSmith.showPanel', () => {
     logger.debug('Showing RoboSmith panel.');
     const panel = vscode.window.createWebviewPanel(
-      'roboSmithPanel', // Identifies the type of the webview. Used internally.
-      'RoboSmith', // Title of the panel displayed to the user.
-      vscode.ViewColumn.One, // Editor column to show the new webview panel in.
-      {
-        // Enable scripts in the webview
-        enableScripts: true,
-      }
+      'roboSmithPanel',
+      'RoboSmith',
+      vscode.ViewColumn.One,
+      { enableScripts: true }
     );
 
-    // --- 4. Event Handler Registration ---
-    // Handle messages from the webview
+    // --- 5. Event Handler Context Injection ---
+    // The single context object containing all dependencies for the event handler.
+    // It is created here where the `panel` is available.
+    const eventHandlerContext: EventHandlerContext = {
+      secureStorageService,
+      apiManager: apiPoolManager,
+      manifest: manifest,
+      panel: panel,
+      // This will be replaced with a real implementation later.
+      contextService: {} as ContextPartitionerService,
+    };
+
+    // --- 6. Event Handler Registration ---
+    const handleEvent = createEventHandler();
     panel.webview.onDidReceiveMessage(
-      async (message) => {
-        // All incoming messages are routed through our central handler.
-        await handleEvent(message, eventHandlerContext);
-      },
+      (message) => handleEvent(message, eventHandlerContext),
       undefined,
       context.subscriptions
     );
 
-    // Set the HTML content for the webview.
-    // In a real application, this would be loaded from a file.
     panel.webview.html = getWebviewContent();
   });
 

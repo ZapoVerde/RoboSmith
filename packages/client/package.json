@@ -1,0 +1,11 @@
+{
+    "name": "client",
+    "version": "0.0.1",
+    "private": true,
+    "dependencies": {
+      "uuid": "^9.0.1"
+    },
+    "devDependencies": {
+      "@types/uuid": "^9.0.8"
+    }
+  }
