@@ -151,31 +151,113 @@ The extension will be architected with a strict separation between the UI and th
 
 ---
 
-### 2.3. The Workflow Engine: Core Concepts
+### **2.3. The Workflow Engine: Core Concepts**
 
-#### 2.3.1. Statement
+#### **2.3.1. Statement**
 
-The entire system is a deterministic state machine driven by a declarative manifest (`workflows.json`). It operates on a few core concepts:
+The entire system is a deterministic, event-driven execution graph driven by a declarative manifest (`workflows.json`). It is not a simple sequential state machine. The architecture is built on a small, powerful set of unified concepts to ensure maximum flexibility, purity, and scalability.
 
-- **Worker:** A specialized AI agent; a pre-configured combination of a specific model and a contract document.
-- **Node:** A container for a sequence of steps designed to accomplish a high-level task. A node is defined by a shared secondary context stack and maintains a contiguous memory ("scratchpad") for its steps.
-- **Step:** The smallest unit of work, defining a single AI call with a specific `worker`, `prompt`, `context_slice`, and `validation` condition.
-- **Action:** A transition in the state machine. Each step defines `actions` for `onSuccess` and `onFailure`, allowing for complex workflow logic.
+*   **Node:** A logical container that holds static memory (context) and directs the entry point for a subroutine or complex task. It performs no logic itself.
+*   **Block:** The single, atomic unit of execution. It is a pure, stateless function that accepts a memory payload and emits a new payload and a Signal Keyword.
+*   **Signal:** A keyword emitted by a Block (e.g., `SIGNAL:SUCCESS`) that communicates its outcome.
+*   **Action:** A simple, atomic command defined in the manifest (`JUMP`, `CALL`, `RETURN`, `FORK`) that dictates the next state transition based on a Signal.
+*   **Payload (Contiguous Memory):** The primary, ordered "chatbox" context that is passed between Blocks. It is an array of `ContextSegment` objects, representing the multi-turn history.
 
-#### 2.3.2. Elaboration for Implementation
+#### **2.3.2. Elaboration for Implementation**
 
-- **The Orchestrator Engine:** This is the central component of the backend. It is responsible for parsing and executing the `workflows.json` manifest.
-  - **Worker Instantiation:** The orchestrator will contain a `WorkerFactory` responsible for creating worker instances based on the `workers` roster in the manifest.
-  - **Node Execution:**
-    - When a node is executed, the orchestrator MUST create a new **Node Execution Context**.
-    - This context includes the **Contiguous Memory**, which SHALL be implemented as a `Map<string, any>` or `Record<string, any>`. The output of each successfully completed step MUST be stored in this map, keyed by the step's `name`.
-    - The context also includes the **Shared Secondary Context Stack**. The orchestrator MUST, at the start of the node, load the content of all files listed in the node's `context` array. This content MUST be prepended to the prompt of every AI call made within that node.
-  - **Step Execution:** The orchestrator's main loop processes one step at a time.
-    - Before making the AI call, it MUST invoke the **`Context Partitioner Service`**, requesting the specific, named `context_slice` defined for that step in the manifest.
-    - The resulting context package is then added to the prompt assembly.
-  - **Action Handler:** The orchestrator MUST contain a dedicated `ActionHandler` module.
-    - After a step is executed and its output validated, the `ActionHandler` is invoked.
-    - It is responsible for determining the next state of the workflow, returning a command such as `PROCEED_TO_NEXT_STEP`, `HALT_AND_FLAG`, `JUMP_TO_NODE(nodeName)`, or `RETURN_FROM_SUBROUTINE`.
+The implementation of the workflow engine MUST adhere to the following architectural mandates, which define the relationship between these core concepts.
+
+---
+
+#### **A. The Two Core Architectural Entities**
+
+The system is composed of two distinct, hierarchical entities defined in the `workflows.json` manifest.
+
+*   **The NODE (Logical Container & Context Boundary):**
+    *   **Role:** To group a set of related Blocks into a logical subroutine and to manage the inheritance of static memory (context).
+    *   **Constraints:** A Node **MUST NOT** have an associated Worker. Its only function is to define an entry point (`entry_block`) and pass context to its children.
+    *   **Context Inheritance:** A Node **MUST** define a `context_inheritance` property, which is a boolean (`TRUE` or `FALSE`).
+        *   `TRUE` (Default): The Node's local `static_memory` is merged on top of its parent's context.
+        *   `FALSE`: The Node creates a **Context Boundary**. All parent context is discarded, and only the Node's local `static_memory` is used. This is mandatory for creating pure, reusable subroutines.
+
+*   **The BLOCK (Pure Execution Unit):**
+    *   **Role:** The atomic unit of work. It is the only entity that executes logic.
+    *   **Constraints:** A Block **MUST** have an associated Worker (e.g., an AI model or an internal utility like `Internal:FileSystemWriter`). It **MUST** be a pure, stateless function of the form: **`f(Memory) -> new Memory + Signal`**.
+    *   **Identification:** Every Block has a single, unique, and hierarchical ID of the form `[NodeId]__[BlockName]` which serves as its **single entry point**.
+
+---
+
+#### **B. The Control Flow Language (The Atomic Action DSL)**
+
+All state transitions are executed via a small, fixed set of atomic commands. The Orchestrator's internal `ActionHandler` will contain a `switch/case` for these commands only.
+
+| Action | DSL Syntax | Orchestrator Action | V1 Status |
+| :--- | :--- | :--- | :--- |
+| **`JUMP`** | `JUMP:TargetId` | Immediately begin execution of the target Block or Node. | **Required** |
+| **`CALL`** | `CALL:TargetId` | Pushes the next Block ID (the return address) onto the internal **Return Stack**, then executes a `JUMP` to the target. | **Required** |
+| **`RETURN`** | `RETURN` | Pops the last address from the **Return Stack** and executes a `JUMP` to it. Fails if the stack is empty. | **Required** |
+| **`FORK`** | `JUMP:[TargetA, TargetB]` | Spawns parallel execution paths for a list of targets. This is the **Implicit Fork** model. The `JUMP` action handles both single and multiple targets. | V2 Feature |
+
+---
+
+#### **C. The Transition Logic (The Manifest's Role)**
+
+The logic for which Action to take is defined exclusively within a Block's `transitions` table in the manifest.
+
+*   **Execution:** The Orchestrator executes a Block, captures the `Signal` string it emits, and finds the corresponding entry in the `transitions` table.
+*   **Binary/Default Fallback:**
+    *   If a matching `on_signal` entry is found, its `action` is executed.
+    *   If **no match is found**, the Orchestrator **MUST** then look for a special, reserved fallback transition with `on_signal: "SIGNAL:FAIL_DEFAULT"`.
+    *   If the fallback is found, its `action` is executed.
+    *   If no fallback is defined, a catastrophic, unrecoverable error is thrown.
+
+```json
+// Example Block Definition in workflows.json
+"Block:Feature_Implement__GenerateCode": {
+    "worker": "Worker:CodeGenerator",
+    "transitions": [
+        { "on_signal": "SIGNAL:SUCCESS", "action": "JUMP:Core_IO__WriteArtifacts" },
+        { "on_signal": "SIGNAL:NEEDS_REFINEMENT", "action": "JUMP:Feature_Implement__RefineCode" },
+        // The fail-safe for any other signal the AI might emit
+        { "on_signal": "SIGNAL:FAIL_DEFAULT", "action": "JUMP:Core_Halt__UnhandledError" }
+    ]
+}
+```
+
+---
+
+#### **D. The Definitive Memory Model**
+
+The total context provided to a Worker is an aggregation of five distinct layers, assembled in a precise order of priority for maximum effect.
+
+| Priority | Layer Name | Type | Origin / Content | Purpose |
+| :--- | :--- | :--- | :--- | :--- |
+| **1 (Highest)** | **Execution Payload** | Dynamic/Static | **The Ordered "Chatbox."** An array of `ContextSegment` objects assembled via the Block's `payload_merge_strategy`, containing previous outputs and immediate contracts. | **The Primary Mandate.** |
+| **2** | **Block Execution Contract** | Static | The Block's local instructions and the Worker's immutable persona, stacked together. | **The Local Rules.** |
+| **3** | **Inherited Context** | Static | The aggregated `static_memory` from all parent Nodes in the call stack. | **The Ancestry.** |
+| **4** | **Primary Artifact** | Dynamic | The full content of the file(s) being modified (read from disk). | **The Subject.** |
+| **5 (Lowest)** | **System Metadata** | Dynamic | The system's immutable runtime state (`WorktreePath`, `BlockId`, etc.). | **The Environment.** |
+
+---
+
+#### **E. The Orchestrator's Role (The Dumb Processor)**
+
+The Orchestrator is a simple, deterministic engine. Its core execution loop for any given Block is:
+
+1.  **Assemble Context:** Build the final prompt by assembling the 5 layers of memory.
+2.  **Execute Block:** Run the Block's Worker with the assembled context and capture the `(new Payload, Signal)` output.
+3.  **Lookup Transition:** Find the matching `action` in the manifest's `transitions` table using the captured `Signal` and the Binary/Default Fallback rule.
+4.  **Execute Action:** Pass the `action` string to the internal `ActionHandler` to perform the next state transition.
+
+---
+
+#### **F. Future-Proofing (V2+ Concepts)**
+
+To ensure scalability, the manifest schema will reserve the following properties within the `transitions` object. The V1 Orchestrator **MUST** ignore them if present but not throw an error.
+
+*   `"guard": "memory.value > 10"`: A string containing a boolean expression to be evaluated against the Execution Payload, which can prevent a transition from occurring.
+*   `"bind_args": [...]`: An array for defining explicit data flow mappings between Blocks.
+
 
 # RoboSmith Detailed Specification: Chapter 3
 

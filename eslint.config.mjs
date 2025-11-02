@@ -15,6 +15,7 @@ export default defineConfig(
       '**/build/**',
       '**/coverage/**',
       '**/*.d.ts',
+      'context-slicer/**',
     ],
   },
 

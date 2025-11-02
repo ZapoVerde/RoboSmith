@@ -17,6 +17,6 @@
   "extends": ["@tsconfig/svelte/tsconfig.json", "../tsconfig.base.json"],
 
   // We only need to define what is unique to this package.
-  "include": ["src/**/*.d.ts", "src/**/*.ts", "src/**/*.svelte"],
+  "include": ["src/**/*.d.ts", "src/**/*.ts", "src/**/*.svelte", "vitest.setup.ts"],
   "references": [{ "path": "./tsconfig.node.json" }]
 }

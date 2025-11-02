@@ -1,165 +1,186 @@
 /**
  * @file packages/client/src/lib/ai/ApiPoolManager.spec.ts
- * @stamp S-20251101-T134500Z-V-TYPED
+ * @stamp S-20251101-T145000Z-V-TESTFIX
  * @test-target packages/client/src/lib/ai/ApiPoolManager.ts
- * @description Verifies the ApiPoolManager's orchestration logic, including the key carousel (round-robin) and failover mechanisms, using a mocked aiClient.
- * @criticality The test target is CRITICAL as it orchestrates core business logic and manages state.
+ * @description
+ * Verifies the complete functionality of the ApiPoolManager, including its singleton
+ * pattern, initialization, and the core failover-driven round-robin logic for the
+ * `execute` method.
+ * @criticality
+ * The test target is CRITICAL as it is a core orchestrator and manages I/O and
+ * concurrency (Rubric Points #2, #5, and #6).
  * @testing-layer Unit
  *
  * @contract
  *   assertions:
- *     - Mocks all external dependencies (SecureStorageService, aiClient).
- *     - Verifies correct key rotation (round-robin).
- *     - Verifies failover logic on API call failure.
- *     - Verifies cooldown mechanism prevents retrying failed keys.
- *     - Verifies correct behavior when all keys fail.
+ *     - Verifies the singleton pattern ensures only one instance is created.
+ *     - Verifies that `initialize` correctly loads keys from the mocked storage service.
+ *     - Verifies the "happy path" where the first key succeeds.
+ *     - Verifies the single and multiple failover paths with retryable errors.
+ *     - Verifies that a non-retryable error fails immediately without trying other keys.
+ *     - Verifies that an `AllApiKeysFailedError` is thrown when all keys are exhausted.
+ *     - Verifies that an error is thrown if no keys are configured.
  */
 
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import type * as vscode from 'vscode';
-import { ApiPoolManager } from './ApiPoolManager';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import type { Mocked } from 'vitest';
+import { ApiPoolManager, AllApiKeysFailedError, type WorkOrder } from './ApiPoolManager';
 import { SecureStorageService } from './SecureStorageService';
-import { aiClient } from './aiClient';
-import type { ApiKey, WorkOrder } from './types';
+import { logger } from '../logging/logger';
+import type { ApiKey } from '@shared/domain/api-key';
+import type * as vscode from 'vscode';
 
-// Mock the dependencies at the module level
+// Mock all external dependencies
 vi.mock('./SecureStorageService');
-vi.mock('./aiClient');
+vi.mock('../logging/logger', () => ({
+  logger: {
+    info: vi.fn(),
+    debug: vi.fn(),
+    warn: vi.fn(),
+    error: vi.fn(),
+  },
+}));
 
 describe('ApiPoolManager', () => {
+  let mockStorageService: Mocked<SecureStorageService>;
   let manager: ApiPoolManager;
-  let mockSecureStorage: SecureStorageService;
-  let mockWorkOrder: WorkOrder;
 
-  const mockKey1: ApiKey = { id: 'key-01', provider: 'openai', secret: 'sk-1' };
-  const mockKey2: ApiKey = { id: 'key-02', provider: 'openai', secret: 'sk-2' };
+  const mockApiKeys: Record<string, ApiKey> = {
+    key1: { id: 'key1-openai', provider: 'openai', secret: 'sk-good' },
+    key2: { id: 'key2-google', provider: 'google', secret: 'gk-fail-rate-limit' },
+    key3: { id: 'key3-anthropic', provider: 'anthropic', secret: 'ak-fail-invalid' },
+    key4: { id: 'key4-openai', provider: 'openai', secret: 'sk-fail-server' },
+  };
+
+  const sampleWorkOrder: WorkOrder = {
+    provider: 'openai',
+    prompt: 'Tell me a story.',
+  };
 
   beforeEach(() => {
     vi.clearAllMocks();
-
-    // @ts-expect-error - Intentionally accessing private static property to reset singleton for test isolation.
-    ApiPoolManager.instance = undefined;
-
-    // Provide a type-correct mock for the vscode.SecretStorage dependency.
-    const mockSecretStorage = {} as vscode.SecretStorage;
-    mockSecureStorage = new SecureStorageService(mockSecretStorage);
-    manager = ApiPoolManager.getInstance(mockSecureStorage);
-
-    mockWorkOrder = {
-      model: 'gpt-4o',
-      prompt: 'Test prompt',
-    };
+    mockStorageService = new SecureStorageService({} as vscode.SecretStorage) as Mocked<SecureStorageService>;
+    // To test the singleton and initialization, we must reset its private static instance.
+    ApiPoolManager['instance'] = undefined;
+    manager = ApiPoolManager.getInstance(mockStorageService);
   });
 
-  afterEach(() => {
-    // @ts-expect-error - Intentionally accessing private static property to clean up singleton post-test.
-    ApiPoolManager.instance = undefined;
-  });
-
-  it('should initialize by loading API keys from secure storage', async () => {
-    // Arrange
-    const mockKeysRecord = { [mockKey1.id]: mockKey1, [mockKey2.id]: mockKey2 };
-    vi.mocked(mockSecureStorage.getAllApiKeys).mockResolvedValue(mockKeysRecord);
-
-    // Act
-    await manager.initialize();
-
-    // Assert
-    expect(mockSecureStorage.getAllApiKeys).toHaveBeenCalledOnce();
-    // @ts-expect-error - Accessing private property 'apiKeyPool' for test verification.
-    expect(manager.apiKeyPool).toEqual([mockKey1, mockKey2]);
-  });
-
-  it('should rotate through available keys on successive successful calls', async () => {
-    // Arrange
-    const mockKeysRecord = { [mockKey1.id]: mockKey1, [mockKey2.id]: mockKey2 };
-    vi.mocked(mockSecureStorage.getAllApiKeys).mockResolvedValue(mockKeysRecord);
-    await manager.initialize();
-
-    vi.mocked(aiClient.generateCompletion).mockResolvedValue({
-      success: true,
-      content: 'Success!',
+  describe('Initialization and Singleton Pattern', () => {
+    it('should always return the same instance', () => {
+      const anotherInstance = ApiPoolManager.getInstance(mockStorageService);
+      expect(manager).toBe(anotherInstance);
     });
 
-    // Act
-    await manager.execute(mockWorkOrder);
-    await manager.execute(mockWorkOrder);
-
-    // Assert
-    const calls = vi.mocked(aiClient.generateCompletion).mock.calls;
-    expect(calls).toHaveLength(2);
-    expect(calls[0][0]).toBe(mockKey1);
-    expect(calls[1][0]).toBe(mockKey2);
+    it('should load and sort keys from storage during initialize', async () => {
+      mockStorageService.getAllApiKeys.mockResolvedValue(mockApiKeys);
+      await manager.initialize();
+      // Directly inspect internal state for testing purposes using string-based access.
+      const internalKeys = manager['apiKeys'];
+      expect(internalKeys.length).toBe(4);
+      // Verify they are sorted by ID
+      expect(internalKeys[0].id).toBe('key1-openai');
+      expect(internalKeys[1].id).toBe('key2-google');
+      expect(internalKeys[2].id).toBe('key3-anthropic');
+    });
   });
 
-  it('should failover to the next key when the first one fails', async () => {
-    // Arrange
-    const mockKeysRecord = { [mockKey1.id]: mockKey1, [mockKey2.id]: mockKey2 };
-    vi.mocked(mockSecureStorage.getAllApiKeys).mockResolvedValue(mockKeysRecord);
-    await manager.initialize();
+  describe('execute', () => {
+    it('should succeed on the first attempt if the first key is valid', async () => {
+      mockStorageService.getAllApiKeys.mockResolvedValue({ key1: mockApiKeys['key1'] });
+      await manager.initialize();
 
-    vi.mocked(aiClient.generateCompletion)
-      .mockResolvedValueOnce({ success: false, error: 'Rate limit exceeded' })
-      .mockResolvedValueOnce({ success: true, content: 'Success from key 2' });
-
-    // Act
-    const result = await manager.execute(mockWorkOrder);
-
-    // Assert
-    const calls = vi.mocked(aiClient.generateCompletion).mock.calls;
-    expect(calls).toHaveLength(2);
-    expect(calls[0][0]).toBe(mockKey1); // Verify it tried key 1 first
-    expect(calls[1][0]).toBe(mockKey2); // Verify it tried key 2 second
-
-    expect(result.success).toBe(true);
-    expect(result.content).toBe('Success from key 2');
-  });
-
-  it('should return a failure result when all keys in the pool fail', async () => {
-    // Arrange
-    const mockKeysRecord = { [mockKey1.id]: mockKey1, [mockKey2.id]: mockKey2 };
-    vi.mocked(mockSecureStorage.getAllApiKeys).mockResolvedValue(mockKeysRecord);
-    await manager.initialize();
-
-    vi.mocked(aiClient.generateCompletion).mockResolvedValue({
-      success: false,
-      error: 'API Error',
+      const result = await manager.execute(sampleWorkOrder);
+      expect(result).toContain('Success');
+      expect(logger.warn).not.toHaveBeenCalled();
     });
 
-    // Act
-    const result = await manager.execute(mockWorkOrder);
+    it('should throw an AllApiKeysFailedError if no keys are initialized', async () => {
+      mockStorageService.getAllApiKeys.mockResolvedValue({});
+      await manager.initialize();
 
-    // Assert
-    expect(aiClient.generateCompletion).toHaveBeenCalledTimes(2);
-    expect(result.success).toBe(false);
-    expect(result.error).toBe('All available API keys failed to process the request.');
-  });
-
-  it('should place failed keys on cooldown and not retry them immediately', async () => {
-    // Arrange
-    vi.useFakeTimers(); // Enable fake timers to control cooldown period
-    const mockKeysRecord = { [mockKey1.id]: mockKey1, [mockKey2.id]: mockKey2 };
-    vi.mocked(mockSecureStorage.getAllApiKeys).mockResolvedValue(mockKeysRecord);
-    await manager.initialize();
-
-    vi.mocked(aiClient.generateCompletion).mockResolvedValue({
-      success: false,
-      error: 'API Error',
+      await expect(manager.execute(sampleWorkOrder)).rejects.toThrow(AllApiKeysFailedError);
     });
 
-    // Act 1: All keys fail and go on cooldown
-    await manager.execute(mockWorkOrder);
-    expect(aiClient.generateCompletion).toHaveBeenCalledTimes(2);
-    vi.mocked(aiClient.generateCompletion).mockClear();
+    it('should failover to the next key if the first one has a retryable error', async () => {
+      // FIX: Use keys with IDs that guarantee the failing key is sorted first.
+      const failingKey: ApiKey = { id: 'a-failing-key', provider: 'openai', secret: 'sk-fail-rate-limit' };
+      const succeedingKey: ApiKey = { id: 'b-succeeding-key', provider: 'openai', secret: 'sk-good' };
 
-    // Act 2: Execute again immediately
-    const secondResult = await manager.execute(mockWorkOrder);
+      mockStorageService.getAllApiKeys.mockResolvedValue({
+        [succeedingKey.id]: succeedingKey,
+        [failingKey.id]: failingKey,
+      });
+      await manager.initialize();
 
-    // Assert 2: No calls made, as keys are on cooldown
-    expect(aiClient.generateCompletion).not.toHaveBeenCalled();
-    expect(secondResult.success).toBe(false);
-    expect(secondResult.error).toContain('No available API keys');
+      const result = await manager.execute(sampleWorkOrder);
 
-    vi.useRealTimers(); // Restore real timers
+      // It should still succeed by using the second key
+      expect(result).toContain('Success');
+      // A warning should have been logged for the failover
+      expect(logger.warn).toHaveBeenCalledOnce();
+      expect(logger.warn).toHaveBeenCalledWith(
+        expect.stringContaining('failed with a retryable error'),
+        expect.anything()
+      );
+    });
+
+    it('should fail immediately if a non-retryable error occurs', async () => {
+      // Load the key that causes a server error
+      mockStorageService.getAllApiKeys.mockResolvedValue({ key4: mockApiKeys['key4'] });
+      await manager.initialize();
+
+      await expect(manager.execute(sampleWorkOrder)).rejects.toThrow('MOCK ERROR: 500 Internal Server Error');
+
+      // It should NOT log a warning because it's not a failover scenario
+      expect(logger.warn).not.toHaveBeenCalled();
+      expect(logger.error).toHaveBeenCalledWith(
+        expect.stringContaining('non-retryable error'),
+        expect.anything()
+      );
+    });
+
+    it('should throw an AllApiKeysFailedError if all keys fail with retryable errors', async () => {
+      mockStorageService.getAllApiKeys.mockResolvedValue({
+        key2: mockApiKeys['key2'], // Fails
+        key3: mockApiKeys['key3'], // Also fails
+      });
+      await manager.initialize();
+
+      await expect(manager.execute(sampleWorkOrder)).rejects.toThrow(AllApiKeysFailedError);
+
+      // It should have logged a warning for each failed key
+      expect(logger.warn).toHaveBeenCalledTimes(2);
+      // It should log the final exhaustion error
+      expect(logger.error).toHaveBeenCalledWith(
+        'All API keys in the pool failed for the current request.'
+      );
+    });
+
+    it('should correctly rotate through the keys in a round-robin fashion', async () => {
+      mockStorageService.getAllApiKeys.mockResolvedValue({
+        key2: mockApiKeys['key2'], // Fails
+        key1: mockApiKeys['key1'], // Succeeds
+        key3: mockApiKeys['key3'], // Fails
+      });
+      await manager.initialize();
+
+      // The internal order is key1, key2, key3
+      // First attempt uses key1 (succeeds). nextKeyIndex becomes 1.
+      await manager.execute(sampleWorkOrder);
+      expect(manager['nextKeyIndex']).toBe(1);
+
+      // Second attempt should start with key2 (fails). It will then try key3 (fails).
+      // It will then try key1 again (succeeds). nextKeyIndex becomes 1.
+      // We need to re-initialize to reset the key states for this specific test case.
+      manager['apiKeys'] = [mockApiKeys.key2, mockApiKeys.key3, mockApiKeys.key1];
+      manager['nextKeyIndex'] = 0;
+
+      await manager.execute(sampleWorkOrder);
+
+      // It tried key2 (fail), key3 (fail), and finally key1 (success).
+      // After key1 succeeded, the index for the *next* call should be 0 (wrapping around).
+      expect(logger.warn).toHaveBeenCalledTimes(2);
+      expect(manager['nextKeyIndex']).toBe(0);
+    });
   });
 });

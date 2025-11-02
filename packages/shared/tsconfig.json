@@ -1,0 +1,13 @@
+/**
+ * @file packages/shared/tsconfig.json
+ * @stamp S-20251101-T162500Z-C-ADDED
+ * @architectural-role Configuration
+ * @description Configures TypeScript for the platform-agnostic 'shared' package. It ensures this package's source code is correctly included in the monorepo's type system.
+ * @core-principles
+ * 1. MUST extend the root `tsconfig.base.json` to ensure monorepo-wide consistency.
+ * 2. OWNS the responsibility of defining the compilation scope for the `shared` package source.
+ */
+ {
+    "extends": "../../tsconfig.base.json",
+    "include": ["src/**/*.ts"]
+  }

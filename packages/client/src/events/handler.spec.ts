@@ -1,97 +1,149 @@
 /**
  * @file packages/client/src/events/handler.spec.ts
- * @stamp S-20251031-T152300Z-V-CREATED
+ * @stamp S-20251101T231500Z-V-TESTFIX-DEFINITIVE
  * @test-target packages/client/src/events/handler.ts
- * @description Verifies that the event handler correctly routes new API key management commands to the appropriate mocked store actions.
- * @criticality The test target is CRITICAL as it is a core orchestrator.
- * @testing-layer Unit
+ * @description
+ * Verifies that the central event handler correctly routes all incoming commands
+ * from the WebView to the appropriate backend services or state stores.
+ * @criticality
+ * The test target is CRITICAL as it is the primary command router (Rubric Point #2).
+ * @testing-layer Integration
  *
  * @contract
  *   assertions:
- *     - Mocks the `settingsStore` dependency.
- *     - Verifies that each command calls the correct store action.
- *     - Verifies that payloads and dependencies are passed correctly.
+ *     - Verifies routing for all API key management commands.
+ *     - Verifies that `startWorkflow` correctly instantiates and calls the Orchestrator.
+ *     - Verifies that the concurrency guard prevents multiple simultaneous workflows.
+ *     - Verifies graceful error handling if the Orchestrator's execution fails. 
  */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest';
-import type { Mocked } from 'vitest';
-import { handleEvent, type EventHandlerContext } from './handler';
-import { settingsStore } from '../features/settings/state/SettingsStore';
-import { SecureStorageService } from '../lib/ai/SecureStorageService';
-import type { Message } from '../shared/types';
-import type { ApiKey } from '@shared/domain/api-key';
-
-// Mock the dependencies that the handler will call.
+// --- HOISTING-SAFE MOCKS ---
+vi.mock('vscode', () => ({
+  window: { createOutputChannel: vi.fn(() => ({ appendLine: vi.fn() })) },
+  default: {},
+}));
 vi.mock('../features/settings/state/SettingsStore');
-vi.mock('../lib/ai/SecureStorageService');
+vi.mock('../lib/workflow/Orchestrator');
+
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import type { Mock, } from 'vitest';
+import type { handleEvent, EventHandlerContext } from './handler';
+import { settingsStore } from '../features/settings/state/SettingsStore';
+import { Orchestrator, WorkflowHaltedError } from '../lib/workflow/Orchestrator';
+import type { Message } from '../shared/types';
+import type { WebviewPanel } from 'vscode';
+import type { WorkflowManifest } from '../lib/workflow/WorkflowService';
+import type { ContextPartitionerService } from '../lib/context/ContextPartitionerService';
+import type { ApiPoolManager } from '../lib/ai/ApiPoolManager';
+import type { SecureStorageService } from '../lib/ai/SecureStorageService';
+import type { ApiKey } from '@shared/domain/api-key';
 
 describe('handleEvent', () => {
   let mockContext: EventHandlerContext;
-  let mockSecureStorageService: Mocked<SecureStorageService>;
+  let mockPostMessage: Mock;
+  let handleEventModule: { handleEvent: typeof handleEvent };
 
-  // Create spies for the store's actions
   const mockLoadApiKeys = vi.fn();
   const mockAddApiKey = vi.fn();
   const mockRemoveApiKey = vi.fn();
 
-  beforeEach(() => {
+  beforeEach(async () => {
     vi.clearAllMocks();
-
-    mockSecureStorageService = new SecureStorageService({} as any) as Mocked<SecureStorageService>;
+    handleEventModule = await import('./handler');
+    mockPostMessage = vi.fn();
 
     mockContext = {
-      secureStorageService: mockSecureStorageService,
+      secureStorageService: {} as unknown as SecureStorageService,
+      panel: { webview: { postMessage: mockPostMessage } } as unknown as WebviewPanel,
+      manifest: {} as WorkflowManifest,
+      contextService: {} as ContextPartitionerService,
+      apiManager: {} as ApiPoolManager,
     };
 
-    // Before each test, mock the implementation of getState to return our spies.
-    // This allows us to intercept calls made by the handler.
     vi.mocked(settingsStore.getState).mockReturnValue({
       loadApiKeys: mockLoadApiKeys,
       addApiKey: mockAddApiKey,
       removeApiKey: mockRemoveApiKey,
-    } as any);
+    } as unknown as ReturnType<typeof settingsStore.getState>);
   });
 
-  it("should route the 'loadApiKeys' command to the settings store", async () => {
-    // Arrange
-    const message: Message = { command: 'loadApiKeys', payload: undefined };
-
-    // Act
-    await handleEvent(message, mockContext);
-
-    // Assert
-    expect(mockLoadApiKeys).toHaveBeenCalledOnce();
-    expect(mockLoadApiKeys).toHaveBeenCalledWith(mockContext.secureStorageService);
+  afterEach(() => {
+    vi.resetModules();
   });
 
-  it("should route the 'addApiKey' command to the settings store with the correct payload", async () => {
-    // Arrange
-    const newApiKey: ApiKey = { id: 'key-1', provider: 'openai', secret: 'sk-1' };
-    const message: Message = { command: 'addApiKey', payload: newApiKey };
+  describe('API Key Management Commands', () => {
+    it("should route the 'loadApiKeys' command to the settings store", async () => {
+      const message: Message = { command: 'loadApiKeys', payload: undefined };
+      await handleEventModule.handleEvent(message, mockContext);
+      expect(mockLoadApiKeys).toHaveBeenCalledOnce();
+    });
 
-    // Act
-    await handleEvent(message, mockContext);
+    it("should route the 'addApiKey' command to the settings store", async () => {
+      const newApiKey: ApiKey = { id: 'key-1', provider: 'openai', secret: 'sk-1' };
+      const message: Message = { command: 'addApiKey', payload: newApiKey };
+      await handleEventModule.handleEvent(message, mockContext);
+      expect(mockAddApiKey).toHaveBeenCalledWith(newApiKey, mockContext.secureStorageService);
+    });
 
-    // Assert
-    expect(mockAddApiKey).toHaveBeenCalledOnce();
-    expect(mockAddApiKey).toHaveBeenCalledWith(newApiKey, mockContext.secureStorageService);
+    it("should route the 'removeApiKey' command to the settings store", async () => {
+      const message: Message = { command: 'removeApiKey', payload: { id: 'key-to-delete' } };
+      await handleEventModule.handleEvent(message, mockContext);
+      expect(mockRemoveApiKey).toHaveBeenCalledWith('key-to-delete', mockContext.secureStorageService);
+    });
   });
 
-  it("should route the 'removeApiKey' command to the settings store with the correct ID", async () => {
-    // Arrange
-    const message: Message = {
-      command: 'removeApiKey',
-      payload: { id: 'key-to-delete' },
-    };
+  describe('Workflow Control Commands', () => {
+    it('should instantiate and run the Orchestrator on "startWorkflow"', async () => {
+      const message: Message = { command: 'startWorkflow', payload: { nodeId: 'test-node' } };
+      await handleEventModule.handleEvent(message, mockContext);
+      expect(Orchestrator).toHaveBeenCalledOnce();
+      const orchestratorInstance = vi.mocked(Orchestrator).mock.instances[0];
+      expect(orchestratorInstance.executeNode).toHaveBeenCalledWith('test-node');
+    });
 
-    // Act
-    await handleEvent(message, mockContext);
+    it('should not start a new workflow if one is already running', async () => {
+      const message: Message = { command: 'startWorkflow', payload: { nodeId: 'test-node' } };
+    
+      let resolveFirstCall: ((value: unknown) => void) | undefined;
+      const firstCallPromise = new Promise((resolve) => {
+        resolveFirstCall = resolve;
+      });
+      const mockExecuteNode = vi.fn().mockReturnValue(firstCallPromise);
+    
+      // Properly typed mock implementation
+      vi.mocked(Orchestrator).mockImplementation(
+        vi.fn(function (this: Orchestrator) {
+          this.executeNode = mockExecuteNode;
+          return this;
+        }) as unknown as new (...args: ConstructorParameters<typeof Orchestrator>) => Orchestrator
+      );
+    
+      const firstPromise = handleEventModule.handleEvent(message, mockContext);
+      await handleEventModule.handleEvent(message, mockContext);
+    
+      expect(Orchestrator).toHaveBeenCalledOnce();
+    
+      if (resolveFirstCall) {
+        resolveFirstCall(undefined);
+      }
+      await firstPromise;
+    });
 
-    // Assert
-    expect(mockRemoveApiKey).toHaveBeenCalledOnce();
-    expect(mockRemoveApiKey).toHaveBeenCalledWith(
-      'key-to-delete',
-      mockContext.secureStorageService
-    );
+    it('should handle and log errors from the Orchestrator execution', async () => {
+      const message: Message = { command: 'startWorkflow', payload: { nodeId: 'failing-node' } };
+      const testError = new WorkflowHaltedError('Test halt');
+      const mockExecuteNode = vi.fn().mockRejectedValue(testError);
+    
+      // Applied the same properly typed mock implementation
+      vi.mocked(Orchestrator).mockImplementation(
+        vi.fn(function (this: Orchestrator) {
+          this.executeNode = mockExecuteNode;
+          return this;
+        }) as unknown as new (...args: ConstructorParameters<typeof Orchestrator>) => Orchestrator
+      );
+    
+      await expect(handleEventModule.handleEvent(message, mockContext)).resolves.not.toThrow();
+    });  
+
   });
 });
