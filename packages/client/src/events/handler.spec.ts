@@ -23,13 +23,13 @@ vi.mock('vscode', () => ({
   default: {},
 }));
 vi.mock('../features/settings/state/SettingsStore');
-vi.mock('../lib/workflow/Orchestrator');
+vi.mock('../lib/workflow/Orchestrator.transitions');
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { Mock, } from 'vitest';
 import { createEventHandler, type EventHandlerContext } from './handler';
 import { settingsStore } from '../features/settings/state/SettingsStore';
-import { Orchestrator, WorkflowHaltedError } from '../lib/workflow/Orchestrator';
+import { Orchestrator, WorkflowHaltedError } from '../lib/workflow/Orchestrator.transitions';
 import type { Message, WorkflowManifest } from '../shared/types';
 import type { WebviewPanel } from 'vscode';
 import type { ContextPartitionerService } from '../lib/context/ContextPartitionerService';

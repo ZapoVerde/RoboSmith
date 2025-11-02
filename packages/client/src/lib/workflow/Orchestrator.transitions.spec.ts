@@ -25,7 +25,7 @@ vi.mock('../logging/logger', () => ({
 
 // --- Imports ---
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { Orchestrator } from './Orchestrator';
+import { Orchestrator } from './Orchestrator.transitions';
 import { logger } from '../logging/logger';
 import type { WorkflowManifest } from '../../shared/types';
 import type { ContextPartitionerService } from '../context/ContextPartitionerService';

@@ -9,6 +9,8 @@
 # Build output
 /out
 /dist
+node_modules
+**/node_modules
 
 # Logs
 *.log

@@ -23,7 +23,7 @@
 
 import type { Message, PlanningState, WorkflowManifest } from '../shared/types';
 import { settingsStore } from '../features/settings/state/SettingsStore';
-import { Orchestrator, WorkflowHaltedError } from '../lib/workflow/Orchestrator';
+import { Orchestrator, WorkflowHaltedError } from '../lib/workflow/Orchestrator.transitions';
 import type { SecureStorageService } from '../lib/ai/SecureStorageService';
 import type { WebviewPanel } from 'vscode';
 import type { ContextPartitionerService } from '../lib/context/ContextPartitionerService';
