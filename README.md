@@ -27,6 +27,5 @@ This project is configured to be developed within a Nix-based environment like G
 1.  **Environment Setup:** The `.idx/dev.nix` file at the root of the project declaratively defines all required dependencies (Node.js, pnpm, linters, etc.). The environment will be automatically configured when the workspace is created.
 2.  **Install Dependencies:** Upon first creation, the `pnpm install` command will be run automatically to install the necessary Node.js packages.
 
-## License
-
-This project is licensed under the MIT License. See the [LICENSE](LICENSE) file for details.
+**AGPL-3.0** — Free forever.  
+Copyright © 2025 Jeremy Strong
