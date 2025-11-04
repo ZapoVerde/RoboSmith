@@ -1,6 +1,6 @@
 /**
  * @file packages/client/src/extension.ts
- * @stamp S-20251101-T132500Z-C-MODIFIED
+ * @stamp S-20251104-T17:25:00Z-C-BUGFIX
  * @architectural-role Feature Entry Point
  * @description The main activation entry point for the VS Code extension. It is responsible for initializing all singleton services and setting up the application's composition root.
  * @core-principles
@@ -14,9 +14,9 @@
  *
  * @contract
  *   assertions:
- *     - purity: "mutates"       # This function has side effects, registering commands and initializing services.
- *     - external_io: "vscode"   # Interacts with the VS Code API.
- *     - state_ownership: "none" # It instantiates stateful services but does not own state itself.
+ *     - purity: "mutates"
+ *     - external_io: "vscode"
+ *     - state_ownership: "none"
  */
 
 import * as vscode from 'vscode';
@@ -25,9 +25,8 @@ import { ApiPoolManager } from './lib/ai/ApiPoolManager';
 import { createEventHandler, type EventHandlerContext } from './events/handler';
 import { logger } from './lib/logging/logger';
 import type { WorkflowManifest } from './shared/types';
-import type { ContextPartitionerService } from './lib/context/ContextPartitionerService';
+import { ContextPartitionerService } from './lib/context/ContextPartitionerService';
 
-// This function is called when your extension is activated
 export async function activate(context: vscode.ExtensionContext) {
   // --- 1. Initialize Logger (Must be first) ---
   logger.initialize(context.extensionMode);
@@ -36,10 +35,12 @@ export async function activate(context: vscode.ExtensionContext) {
   // --- 2. Service Instantiation & Initialization ---
   const secureStorageService = new SecureStorageService(context.secrets);
   const apiPoolManager = ApiPoolManager.getInstance(secureStorageService);
+  const contextPartitionerService = ContextPartitionerService.getInstance();
 
   await apiPoolManager.initialize();
   logger.info('API Pool Manager initialized.');
-  
+  logger.info('Context Partitioner Service initialized.');
+
   // --- 3. Load and Validate Workflow Manifest ---
   const workspaceFolders = vscode.workspace.workspaceFolders;
   if (!workspaceFolders) {
@@ -47,13 +48,20 @@ export async function activate(context: vscode.ExtensionContext) {
     return;
   }
   const manifestUri = vscode.Uri.joinPath(workspaceFolders[0].uri, '.vision', 'workflows.json');
-  
-  const rawManifest = await vscode.workspace.fs.readFile(manifestUri);
-  const manifestContent = Buffer.from(rawManifest).toString('utf-8');
-  // Enforce the contract at the system boundary.
-  const manifest = JSON.parse(manifestContent) as WorkflowManifest;
 
-  logger.info('Workflow manifest loaded and parsed successfully.');
+  // MODIFICATION: Re-introduce the try...catch block to handle file I/O errors.
+  let manifest: WorkflowManifest;
+  try {
+    const rawManifest = await vscode.workspace.fs.readFile(manifestUri);
+    const manifestContent = Buffer.from(rawManifest).toString('utf-8');
+    manifest = JSON.parse(manifestContent) as WorkflowManifest;
+    logger.info('Workflow manifest loaded and parsed successfully.');
+  } catch (error) {
+    logger.error('Failed to read or parse workflow manifest.', { error });
+    // CRITICAL FIX: Halt execution if the manifest is invalid.
+    // The test will now pass because this error is handled.
+    return;
+  }
 
   // --- 4. Command Registration ---
   const disposable = vscode.commands.registerCommand('roboSmith.showPanel', () => {
@@ -66,15 +74,12 @@ export async function activate(context: vscode.ExtensionContext) {
     );
 
     // --- 5. Event Handler Context Injection ---
-    // The single context object containing all dependencies for the event handler.
-    // It is created here where the `panel` is available.
     const eventHandlerContext: EventHandlerContext = {
       secureStorageService,
       apiManager: apiPoolManager,
-      manifest: manifest,
+      manifest: manifest, // This is now guaranteed to be defined here.
       panel: panel,
-      // This will be replaced with a real implementation later.
-      contextService: {} as ContextPartitionerService,
+      contextService: contextPartitionerService,
     };
 
     // --- 6. Event Handler Registration ---
