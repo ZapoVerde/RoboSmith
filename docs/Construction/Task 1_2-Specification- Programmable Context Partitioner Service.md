@@ -1,84 +1,125 @@
 
----
-
-# Specification: Programmable Context Partitioner Service
+# **Specification: The Context Partitioner Service**
 
 ## 1. High-Level Summary
-This specification defines the `ContextPartitionerService`, a critical component that serves as the system's "surgical tool" for context management. Its core purpose is to fulfill the project's primary philosophy of *"No unnecessary context, but all the necessary context."*
 
-The service acts as a simple, stateless façade that wraps a high-performance, pre-compiled binary (`roberto-mcp`). It translates requests from the `Orchestrator` for specific, named "slices" of context into command-line executions. This function is essential for economic viability by minimizing token consumption and for AI effectiveness by keeping prompts highly focused and relevant.
+This specification defines the `ContextPartitionerService`, a critical component that acts as the sole integration point for the `roberto-mcp` code analysis engine. Its core purpose is to serve as a **"Query Orchestrator" and Concurrency Manager**, translating requests from the workflow engine into executed `roberto-mcp` commands and returning the results.
+
+This service is the direct implementation of the architecture laid out in **`docs/architecture/r-mcp_Integration_and_Strategy.md`**. This specification focuses exclusively on the service's internal contract, responsibilities, and the precise algorithm for its concurrency-limited queue.
 
 ## 2. Core Data Contracts
-The service operates on a simple and stable contract, accepting a request for a context slice and returning the resulting text package.
+
+The service operates on a set of strongly-typed contracts for each `roberto-mcp` tool.
 
 ```typescript
-/**
- * Defines the arguments required to request a specific context slice.
- */
-export interface GetContextArgs {
-  /**
-   * The absolute path to the source file from which context will be extracted.
-   */
-  filePath: string;
-
-  /**
-   * The named identifier of the context "slice" to generate, which corresponds
-   * to a predefined rule within the roberto-mcp binary.
-   */
-  sliceName: string;
+// --- Internal Queuing Contract ---
+interface QueuedRequest {
+  tool: string;
+  params: Record<string, any>;
+  resolve: (value: any) => void;
+  reject: (reason?: any) => void;
 }
 
-/**
- * A type alias for the final, string-based context package returned by the
- * service, ready to be injected into an AI prompt.
- */
-export type ContextPackage = string;
+// --- Public API Contracts ---
+export interface GetFileOutlineArgs {
+  worktreePath: string;
+  filePath: string;
+}
+
+export interface FileOutline {
+  functions: Array<{ name: string; signature: string; line: number }>;
+  classes: Array<{ name: string; line: number }>;
+  // ... other symbol types
+}
+
+export interface GetSymbolReferencesArgs {
+  worktreePath: string;
+  symbolName: string;
+}
+
+export interface SymbolReference {
+  filePath: string;
+  line: number;
+  // ... other reference details
+}
 ```
 
 ## 3. Component Specification
 
 ### Component: ContextPartitionerService
-*   **Architectural Role:** Stateless Façade
+*   **Architectural Role:** `Orchestrator` (for external processes)
 *   **Core Responsibilities:**
-    *   Translate a context request (`GetContextArgs`) into a command-line execution of the `roberto-mcp` binary.
-    *   Determine the correct, platform-specific binary to execute based on the host's operating system and CPU architecture.
-    *   Manage the entire lifecycle of the child process, including spawning, capturing `stdout` and `stderr` streams, and handling exit codes.
-    *   Encapsulate all details of interacting with the external binary, presenting a clean, promise-based API to the rest of the application.
-    *   Provide robust error handling for scenarios where the binary is missing, fails to execute, or returns an error.
+    *   To act as the exclusive, system-wide client for the `roberto-mcp` binary's one-shot mode.
+    *   To manage a **concurrency-limited request queue** to prevent system thrashing from excessive CPU-intensive processes.
+    *   To translate its public method calls into the correct command-line arguments for `roberto-mcp`.
+    *   To handle the entire lifecycle of the child process, including capturing `stdout`, parsing JSON, and managing all error conditions.
 
 *   **Public API (TypeScript Signature):**
     ```typescript
     export class ContextPartitionerService {
-      /**
-       * Gets the single, shared instance of the ContextPartitionerService.
-       */
-      public static getInstance(): ContextPartitionerService;
+      public static getInstance(maxConcurrentProcesses?: number): ContextPartitionerService;
 
-      /**
-       * Retrieves a named context slice by executing the roberto-mcp binary.
-       * @param args An object containing the filePath and sliceName.
-       * @returns A promise that resolves with the context package string.
-       * @throws An error if the binary cannot be found, fails to execute,
-       *         or returns a non-zero exit code.
-       */
-      public async getContext(args: GetContextArgs): Promise<ContextPackage>;
+      public async getFileOutline(args: GetFileOutlineArgs): Promise<FileOutline>;
+      public async getSymbolReferences(args: GetSymbolReferencesArgs): Promise<SymbolReference[]>;
+      public async getSymbol(args: /* ... */): Promise</* ... */>;
+      public async codeSearch(args: /* ... */): Promise</* ... */>;
+      // ... other methods corresponding to all required r-mcp tools
     }
     ```
 
 *   **Detailed Behavioral Logic (The Algorithm):**
-    1.  The `getContext` method is invoked with `filePath` and `sliceName`.
-    2.  **Determine Binary Path:** The service will first determine the absolute path to the correct `roberto-mcp` binary located within the extension's packaged `bin/` directory. It does this by inspecting the host environment (e.g., `process.platform` for `win32`, `darwin`, `linux` and `process.arch` for `x64`, `arm64`). If a compatible binary cannot be found at the expected path, the method must immediately throw a `MissingBinaryError`.
-    3.  **Spawn Child Process:** The service will spawn the selected binary as a new child process. The `filePath` and `sliceName` from the arguments will be passed as separate, sanitized command-line arguments to the process.
-    4.  **Capture and Buffer Output:** The service will attach listeners to the child process's `stdout` and `stderr` streams. All data chunks from `stdout` will be collected and decoded into a single UTF-8 string. All data from `stderr` will be similarly collected.
-    5.  **Await Process Completion:** The service will wait for the child process to exit. This will be wrapped in a `Promise`.
-    6.  **Evaluate Outcome:**
-        *   If the process exits with a code of `0` and `stderr` is empty, the operation is successful. The promise resolves with the complete, buffered `stdout` string.
-        *   If the process exits with a non-zero code, or if any data was written to `stderr`, the operation has failed. The promise must be rejected with a detailed `ProcessExecutionError` that includes the exit code and the full contents of `stderr` to facilitate debugging.
-    7.  **Timeout:** The entire operation will be wrapped with a timeout (e.g., 10 seconds). If the child process does not exit within this period, it will be forcefully terminated, and the promise will be rejected with a `ProcessTimeoutError`.
+    The service is a stateful singleton that manages a queue to control execution flow.
+
+    1.  **Internal State:**
+        *   `private readonly maxConcurrentProcesses: number;` (e.g., `2`)
+        *   `private activeProcessCount: number = 0;`
+        *   `private requestQueue: QueuedRequest[] = [];`
+
+    2.  **The Public Method Workflow (e.g., `getFileOutline`):**
+        a. When a public method is called, it does **not** execute immediately.
+        b. It returns a `new Promise((resolve, reject) => { ... })`.
+        c. Inside the promise, it creates a `QueuedRequest` object containing the tool name (`'get_file_outline'`), the `args`, and the `resolve` and `reject` functions.
+        d. It pushes this object onto the `this.requestQueue`.
+        e. It calls a private `_processQueue()` method to attempt execution.
+
+    3.  **The Core Processing Loop (`_processQueue` private method):**
+        a. **Guard Clause 1:** If `this.activeProcessCount >= this.maxConcurrentProcesses`, the method returns immediately. The queue will be processed later.
+        b. **Guard Clause 2:** If `this.requestQueue` is empty, the method returns immediately.
+        c. **Dequeue and Increment:** If the guards pass, the method dequeues the next `QueuedRequest` from the front of the array and immediately increments `this.activeProcessCount`.
+        d. **Execute the One-Shot Command:** The service spawns the `roberto-mcp` process within a `try...finally` block to guarantee state consistency.
+
+            ```typescript
+            try {
+              // 1. Construct CLI args from the request object.
+              const args = [
+                '--oneshot',
+                '--tool', request.tool,
+                '--params', JSON.stringify(request.params)
+              ];
+              // 2. Spawn the child process.
+              const child = spawn(binaryPath, args);
+              // 3. Capture stdout/stderr, wait for 'close' event.
+              // 4. Wrap this logic in a Promise.race with a timeout.
+              
+              // 5. On SUCCESS (exit code 0):
+              //    - Parse the stdout JSON.
+              //    - Call request.resolve(parsedJson).
+              // 6. On FAILURE (non-zero code, stderr, or JSON parse error):
+              //    - Create a specific error (ProcessExecutionError, JsonParseError).
+              //    - Call request.reject(error).
+            } catch (error) {
+              request.reject(error);
+            } finally {
+              // CRITICAL: This block ensures the queue always advances.
+              this.activeProcessCount--;
+              this._processQueue(); // Attempt to process the next item.
+            }
+            ```
 
 *   **Mandatory Testing Criteria:**
-    *   The service must throw a specific error if `getContext` is called and a binary for the current test platform cannot be found.
-    *   A test must verify that when `getContext` is invoked, a child process is spawned with the exact, expected command-line arguments (e.g., `['/path/to/file.ts', 'slice-name']`).
-    *   A test must successfully resolve with the correct string content by mocking a child process that writes to `stdout` and exits with code `0`.
-    *   A test must reject with a comprehensive error message by mocking a child process that writes a specific error message to `stderr` and exits with a non-zero code.
-    *   A test must verify that the service's promise is rejected if the mocked child process does not exit within the configured timeout period.
+    *   A test must verify that if 3 requests are submitted with a concurrency limit of 2, the third request's `spawn` call is **not** made until one of the first two has completed.
+    *   A test must verify that requests are processed in strict First-In-First-Out (FIFO) order.
+    *   A test must verify that `_processQueue` is called in the `finally` block even if the process execution fails, ensuring the queue does not get stuck.
+    *   A test must verify that a malformed JSON string from the binary's `stdout` results in a rejected promise with a specific `JsonParseError`.
+    *   A test must verify that a non-zero exit code rejects the promise with a `ProcessExecutionError` that includes the `stderr` content.
+    *   A test must verify that the timeout mechanism correctly rejects the promise if the process takes too long.

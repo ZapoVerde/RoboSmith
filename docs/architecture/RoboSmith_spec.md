@@ -34,13 +34,10 @@ This philosophy translates into the following non-negotiable architectural manda
   - The core logic of RoboSmith is a deterministic state machine. Its behavior MUST be explicitly defined and driven by the declarative `workflows.json` manifest. The system does not "decide" what to do next; it executes the defined workflow program.
   - All AI interactions are structured as calls to specialized "Workers," not as open-ended conversations with a general-purpose assistant.
 
-- **Mandate B: Context is Surgically Precise and Multi-Layered.**
-  - The principle of "No unnecessary context, but all the necessary context" MUST be implemented via the integration of a **Programmable Context Partitioner** (based on `roberto-mcp`).
-  - This partitioner is a high-performance, polyglot, compiled binary (e.g., written in Rust) that is executed as a command-line tool.
-  - It will be guided by a **dual-preamble system** within each source file:
-    1.  A **Machine-Readable Header:** A single-line JSON comment (e.g., `// roberto: {...}`) for high-speed, programmatic analysis by the partitioner.
-    2.  An **Architectural Contract:** A rich, multi-line JSDoc block providing deep intent and principles for the AI Workers.
-  - The workflow manifest (`workflows.json`) will specify which named "slice" of context (as defined by the partitioner's configuration) is required for each step, ensuring each worker receives the minimal, purpose-built context it needs.
+- **Mandate B: Context is Surgically Precise and Sourced from a Code Analysis Engine.**
+  - The principle of "No unnecessary context, but all the necessary context" MUST be implemented via the integration of a **Programmable Context Partitioner**, a high-performance, polyglot, compiled binary named `roberto-mcp`.
+  - This tool runs as a **code analysis server engine**, which is queried by a dedicated `ContextPartitionerService` within the extension. The service uses a "One-Shot with Persistent Cache" model to request specific, structured information about the codebase (e.g., file outlines, symbol references, semantic search results).
+  - The workflow manifest (`workflows.json`) will specify which named "slice" of context is required for each step. This is translated into a specific `r-mcp` tool call (e.g., `get_file_outline`, `code_search`) by the Orchestrator, ensuring each worker receives the minimal, purpose-built context it needs.
 
 - **Mandate C: The User's Role is "Management by Exception."**
   - The default state of any workflow is autonomous execution. The user initiates a process and observes its progress.
@@ -132,7 +129,7 @@ The extension will be architected with a strict separation between the UI and th
     - The **Orchestrator Engine**
     - The **API Pool Manager**
     - The **Git Worktree Manager**
-    - The **Context Partitioner Service** (the wrapper for `roberto-mcp`)
+    - The **Context Partitioner Service** (the client and query orchestrator for the `roberto-mcp` binary)
   - It maintains the complete state of all active workflow sessions.
 
 - **The WebView (Frontend):**
@@ -188,15 +185,7 @@ The system is composed of two distinct, hierarchical entities defined in the `wo
 ---
 
 #### **B. The Control Flow Language (The Atomic Action DSL)**
-
-All state transitions are executed via a small, fixed set of atomic commands. The Orchestrator's internal `ActionHandler` will contain a `switch/case` for these commands only.
-
-| Action | DSL Syntax | Orchestrator Action | V1 Status |
-| :--- | :--- | :--- | :--- |
-| **`JUMP`** | `JUMP:TargetId` | Immediately begin execution of the target Block or Node. | **Required** |
-| **`CALL`** | `CALL:TargetId` | Pushes the next Block ID (the return address) onto the internal **Return Stack**, then executes a `JUMP` to the target. | **Required** |
-| **`RETURN`** | `RETURN` | Pops the last address from the **Return Stack** and executes a `JUMP` to it. Fails if the stack is empty. | **Required** |
-| **`FORK`** | `JUMP:[TargetA, TargetB]` | Spawns parallel execution paths for a list of targets. This is the **Implicit Fork** model. The `JUMP` action handles both single and multiple targets. | V2 Feature |
+The engine uses a simple DSL with actions like JUMP, CALL, and RETURN. The complete specification for this DSL and all internal system workers is centrally located in docs/Internal_Workers_and_Actions.md.
 
 ---
 
@@ -263,7 +252,7 @@ To ensure scalability, the manifest schema will reserve the following properties
 
 ## 3. V1 Feature Specification
 
-This chapter details the specific features required for the V1 release. Each feature must be implemented according to the provided elaboration, ensuring it aligns with the core principles and architecture defined in the preceding chapters.
+This chapter details the specific features required for the V1 release. Each feature must be implemented according to the provided elaboration, ensuring it aligns with the core principles and architecture defined in the preceding chapters, most notably the **"Principle of Apparent Simplicity."**
 
 ---
 
@@ -273,87 +262,71 @@ The Factory is the core orchestrator that executes the `workflows.json` manifest
 
 #### 3.1.1. Statement
 
-- **The Workflow Manifest (`workflows.json`):** This is the "source code" for all AI workflows. It is a single, version-controllable file that declaratively defines all `workers`, `nodes`, and their constituent `steps` and `actions`.
-- **"Planning Session" UI:** A UI that visualizes the real-time execution of the manifest, showing the status of each node and step. It defaults to "auto-proceed" on success.
+- **The Workflow Manifest (`workflows.json`):** This is the "source code" for all AI workflows. It is a single, version-controllable file that declaratively defines all `workers`, `nodes`, `blocks`, and the `transitions` between them.
+- **The Interactive Mission Control Panel:** A UI that provides a real-time, "living Visio diagram" of the manifest's execution. It visualizes the state of each block and the "lit path" of the workflow as it transitions between them based on `Signals`.
 
 #### 3.1.2. Elaboration for Implementation
 
 - **Workflow Manifest (`workflows.json`) Parsing:**
-  - The Extension Host MUST, upon activation, locate and parse the `.vision/workflows.json` file.
-  - A dedicated `WorkflowService` shall be responsible for validating this file against a predefined JSON schema upon loading. If validation fails, a user-facing error must be shown.
+  - The Extension Host MUST, upon activation, locate, parse, and validate the `.vision/workflows.json` file against a predefined JSON Schema.
+  - A dedicated `WorkflowService` shall be responsible for this loading and validation.
 
-- **"Planning Session" UI (WebView):**
-  - The UI SHALL be implemented as a VS Code WebView panel.
-  - It is a **reactive component** that renders a state object received from the Extension Host.
-  - **State Object Schema:** The Extension Host will send a `planningStateUpdate` message to the UI. The payload MUST conform to this schema:
-    ```typescript
-    interface PlanningState {
-      nodeId: string;
-      currentStepIndex: number;
-      steps: Array<{
-        name: string;
-        status: 'pending' | 'in_progress' | 'action_required' | 'complete';
-      }>;
-      lastOutput: string | null;
-      isHalted: boolean;
-      errorMessage: string | null;
-    }
-    ```
-  - **Supervisor Controls Implementation:**
-    - The UI will render buttons (`[Accept]`, `[Revise]`, `[Abort]`) only when `isHalted` is true.
-    - Clicking a button MUST send a corresponding message to the Extension Host (e.g., `{ command: 'userAction', payload: { action: 'proceed' } }`).
+- **Interactive Mission Control Panel (WebView):**
+  - This UI SHALL be implemented as a VS Code WebView panel that opens in the main editor area when a workflow is active.
+  - It is a **reactive component** that renders a rich `WorkflowViewState` object received from the Extension Host.
+  - **`WorkflowViewState` Schema:** The payload sent from the backend MUST contain the complete data required to render the interactive graph, including the static blueprint (blocks, transitions), the live statuses, and the detailed execution log for inspection.
+  - **Interactivity:** The blocks rendered in the diagram MUST be selectable. Clicking a block MUST trigger a message to the backend to populate the Inspector Panels with the context and conversation for that specific step.
 
 ---
 
-### 3.2. The "Workbench": The Multi-Session Cockpit
+### 3.2. Navigation & Workspace System
 
-The Workbench is the user's primary dashboard for initiating and managing the parallel execution of work plans.
+This system provides the user with a safe, intuitive, and unambiguous way to manage and switch between their main project and multiple, parallel automated workflows.
 
 #### 3.2.1. Statement
 
-- **Multi-Session Tabs:** The Workbench UI supports multiple tabs, allowing the parallel execution of tasks. Each tab is a self-contained "universe" backed by a dedicated Git Worktree.
-- **Unified Work Plan Panel:** A sidebar panel that lists all files from an approved plan. Each item has a single action: `[ 🚀 Implement ]`, which triggers the `Implement` node from the manifest in a new Workbench tab.
-- **Automated QA Loop:** The default `Implement` node will be a multi-step process that automates quality assurance, using different workers for coding and validation, and automatically handling syntax errors.
+- **The Status Bar Navigator:** A dedicated, single-purpose UI element in the VS Code Status Bar that acts as the sole entry point for initiating workflows and switching between contexts.
+- **Dynamic Single-Root Workspace:** The extension will programmatically manage the VS Code workspace to ensure the File Explorer and other native tools are always scoped to a single, pure context (either the main project or one specific worktree), enforcing the "Clear Separation of Worlds."
 
 #### 3.2.2. Elaboration for Implementation
 
-- **Workbench UI Panel (WebView):**
-  - This UI MUST be registered as a primary sidebar view in `package.json`.
-  - It MUST be capable of rendering a tab for each active session managed by the Extension Host.
-  - The tab header for each session MUST render the **decoupled UI systems** (Health stoplight, Overlap label, Queue icon) as defined in `docs/architecture/GitWorktree_System.md`.
+- **Status Bar Navigator Implementation:**
+  - A `vscode.StatusBarItem` MUST be registered on activation. Its text MUST reflect the currently active RoboSmith context.
+  - Clicking this item MUST trigger a `vscode.window.showQuickPick` dropdown. This dropdown is the **only** UI for navigating between the "Lobby" (main project) and active workflow sandboxes.
 
-- **Automated QA Loop Logic:**
-  - Upon receiving an `implementTask` message, the Orchestrator MUST initiate the `Implement` node from the manifest.
-  - A **heuristic check for squiggles** MUST be performed after the code generation step by calling `vscode.languages.getDiagnostics(uri)`. If errors are found, the Orchestrator initiates the `onFailure` action defined for that step (e.g., branching to a `Troubleshoot_Code` node).
+- **Workspace Management Logic:**
+  - Upon user selection in the Quick Pick dropdown, the extension MUST use the `vscode.workspace.updateWorkspaceFolders()` API to **replace** the visible workspace folders with the single root corresponding to the selected context.
+  - This logic ensures the File Explorer remains a "pure," single-root view at all times, preventing user confusion and accidental cross-branch edits.
 
 ---
 
 ### 3.3. Core Technical Features (All V1)
 
-This section defines the implementation requirements for the core backend services.
+This section defines the implementation requirements for the core backend services that power the user experience.
 
 #### 3.3.1. API Pool Manager
 
-- **Implementation:** A singleton class `ApiPoolManager` will be instantiated in the Extension Host.
+- **Implementation:** A singleton class `ApiPoolManager` instantiated in the Extension Host.
 - **Configuration:** It MUST load its roster of keys from the `SecureStorageService`.
-- **Interface:** It will expose a primary method, `execute(workOrder: WorkOrder): Promise<Result>`, which will contain the "failover-driven round-robin" logic.
+- **Interface:** It will expose a primary method, `execute(workOrder: WorkOrder): Promise<Result>`, which will contain the "failover-driven round-robin" logic for economic viability and robustness.
 
 #### 3.3.2. Git Worktree Isolation & Management
 
-- **Authoritative Document:** The entire operational logic, including initialization, conflict detection, queuing, and UI signaling, is defined in the canonical architectural document: **`docs/architecture/GitWorktree_System.md`**.
-- **Implementation:** A singleton class `GitWorktreeManager` will be instantiated. The implementation of this service and its related UI components MUST adhere strictly to the design laid out in the authoritative document.
-- **Key Responsibilities:** The service's primary responsibilities include creating/removing worktrees, running the proactive overlap scan using the Context Partitioner's seed files, and managing the FIFO queue for conflicting tasks.
+- **Authoritative Document:** The entire operational logic is defined in `docs/GitWorktree_System.md`. The implementation MUST adhere strictly to this design.
+- **Implementation:** A singleton class `GitWorktreeManager` will be instantiated.
+- **Key Responsibilities:** Creating/removing worktrees in response to the user's navigation choices, running the proactive conflict scan, and managing the FIFO queue for conflicting tasks.
+- **State Persistence:** The service MUST use the `vscode.ExtensionContext.globalState` API to persist its list of active sessions. This enables it to recover its state after a restart and perform reconciliation to prevent "zombie" or "ghost" worktrees.
 
 #### 3.3.3. The Integration Panel
 
-- **Implementation:** A dedicated WebView panel.
-- **Trigger:** It is shown when the Orchestrator sends a `taskReadyForIntegration` message, containing the `sessionId` and `branchName`.
+- **Implementation:** A dedicated WebView panel that replaces the Mission Control Panel upon successful workflow completion.
 - **Primary Action: `[ 🚀 Open Terminal in Worktree ]`**
-  - This is the main user action. It sends a message to the Extension Host.
-  - The backend handles this by using `vscode.window.createTerminal()`, providing the `cwd` option pointing to the correct worktree path.
-- **Final Actions: User-Controlled Commit & Merge**
-  - The panel will display the staged changes and a pre-populated commit message.
-  - The `[ ✅ Commit, Merge & Push ]` button is the final step, which the user must explicitly click. The backend will then execute the necessary Git commands.
+  - This button MUST use `vscode.window.createTerminal()` with the `cwd` option set to the correct worktree path, providing the user with a scoped environment for validation.
+- **Final Actions: User-Controlled Disposition**
+  - The panel MUST present three final action buttons:
+    1.  **`[✅ Accept and Merge Branch]`**: Executes the Git commands to commit, merge the work, and clean up the worktree.
+    2.  **`[❌ Reject and Discard Branch]`**: Executes the Git commands to permanently delete the worktree and branch.
+    3.  **`[⏸️ Finish & Hold Branch]`**: Updates the workflow's state to `Held` and preserves the worktree and branch for later action.
 
 #### 3.3.4. Quick Fix Mode
 
@@ -364,12 +337,21 @@ This section defines the implementation requirements for the core backend servic
 
 #### 3.3.5. Programmable Context Partitioner (Integration)
 
+- **Authoritative Document:** The complete architecture, modification plan, and data flow for the `roberto-mcp` integration is specified in **`docs/architecture/r-mcp_Integration_and_Strategy.md`**. The detailed implementation contract for the service itself is defined in **`docs/Construction/Task 1_2-Specification- Programmable Context Partitioner Service.md`**.
 - **Implementation:** A singleton class `ContextPartitionerService` will be instantiated.
-- **Interface:** It MUST expose an async method `getContext(filePath: string, sliceName: string): Promise<string>`.
-- **Logic:** This service is a wrapper around the compiled `roberto-mcp` binary.
-  - It MUST select the correct binary for the host OS.
-  - It will execute the binary as a child process, passing the `filePath` and `sliceName` as command-line arguments.
-  - It will capture the `stdout` from the process and return the final context package as a string.
+- **Interface:** It MUST expose a discrete, async method for each `r-mcp` tool that the system requires (e.g., `getFileOutline(args)`, `getSymbolReferences(args)`).
+- **Logic:** This service is a client and query orchestrator for the `roberto-mcp` binary, operating in a "One-Shot with Persistent Cache" mode.
+  - It MUST translate method calls into the correct command-line arguments for `roberto-mcp`.
+  - It MUST manage a **concurrency-limited queue** to prevent system overload from too many simultaneous analysis processes.
+  - It will spawn the binary as a child process for each dequeued request, capture the `stdout` (JSON), and parse the result.
+
+#### 3.3.6. Inspector Panels
+
+- **Implementation:** A set of dedicated WebViews registered in the bottom "Panel" area (alongside the Terminal).
+- **Functionality:**
+    - **"RoboSmith Chat":** Displays the turn-by-turn conversation for the currently selected block.
+    - **"Context Inspector":** Displays the input context ("little icons") for the currently selected block.
+- **Context-Awareness:** These panels MUST listen for `blockSelected` events from the Mission Control Panel and filter their content accordingly, providing on-demand, deep-dive transparency.
 
 ---
 
@@ -377,16 +359,16 @@ This section defines the implementation requirements for the core backend servic
 
 #### 3.4.1. Statement
 
-A consistent, decoupled signaling system will be used to provide clear, unambiguous status information for each session tab.
+A consistent, decoupled signaling system will be used to provide clear, unambiguous status information for each workflow.
 
 #### 3.4.2. Elaboration for Implementation
 
-- **Decoupled Systems:** The UI for each tab header will be composed of several independent elements, as defined in `docs/architecture/GitWorktree_System.md`. This includes:
-  - **Health System:** A color-coded stoplight (`Grey`, `Amber`, `Red`, `Green`) representing the technical integrity of the worktree.
-  - **Overlap System:** A text-based label (`Clear`, `Context Overlap`, `Clash`) indicating the result of the conflict scan.
-  - **Queue System:** An icon (`⏳`, `▶️`, `✅`) representing the task's status in the FIFO queue.
-- **Shared Type Definition:** A shared `types.ts` file MUST define enums for each of these status systems (e.g., `HealthStatus`, `OverlapStatus`, `QueueStatus`).
-- **State Management:** All state objects passed from the Extension Host to the WebViews MUST include properties for each of these status systems.
+- **Decoupled Systems:** The UI for each workflow will be composed of several independent status indicators, as defined in `docs/GitWorktree_System.md`. This includes:
+  - **Health System:** A color-coded icon (e.g., `🟢`) representing the technical integrity of the worktree.
+  - **Overlap System:** A text-based label (`Clear`, `Clash`) indicating the result of the conflict scan.
+  - **Queue System:** An icon (`⏳`, `▶️`, `✅`, `⏸️`) representing the task's status in the FIFO queue or `Held` state.
+- **Display Location:** These status indicators will be primarily displayed within the **Status Bar Navigator's Quick Pick dropdown** and in the **"Status Ticker"** at the top of the Mission Control Panel, providing at-a-glance information in all relevant contexts.
+- **Shared Type Definition:** A shared `types.ts` file MUST define enums or type aliases for each of these status systems (e.g., `HealthStatus`, `OverlapStatus`, `QueueStatus`).
 
 # RoboSmith Detailed Specification: Chapter 4
 
@@ -479,7 +461,7 @@ Successfully define a multi-step, multi-worker node (like `Implement`) in `workf
 
 #### 5.2.1. Statement
 
-Supervise the "Factory" as it autonomously executes a plan, only intervening when the system correctly identifies a failure and triggers a `stop_and_flag` action.
+Supervise the "Factory" as it autonomously executes a plan, only intervening when the system correctly identifies a failure and triggers a `HALT_AND_FLAG` action.
 
 #### 5.2.2. Elaboration for Implementation
 
@@ -602,9 +584,9 @@ The use of Git Worktrees is a core architectural pillar for safety and paralleli
 
 #### 6.2.2. Mitigation Strategies
 
-- **Primary Mitigation: The Formalized Git Worktree System Architecture.**
-  - **Implementation Mandate:** The risk is primarily mitigated by the detailed architectural plan laid out in **`docs/architecture/GitWorktree_System.md`**. This is the authoritative document. Its key features are:
-    - **Proactive Conflict Detection:** A simple, fast, and 100% reliable conflict scan based on the intersection of the Context Partitioner's "seed files." This prevents dangerous file modification conflicts before they can occur.
+- **Primary Mitigation: The Formalized Git Worktree System Architecture with Semantic Clash Detection.**
+  - **Implementation Mandate:** The risk is primarily mitigated by the detailed architectural plan laid out in **`docs/GitWorktree_System.md`**. This architecture is powered by the `roberto-mcp` engine. Its key features are:
+    - **Proactive Semantic Conflict Detection:** A fast and highly reliable conflict scan that uses `r-mcp`'s `get_symbol_references` and `get_file_outline` tools to understand the *semantic dependencies* between files, not just their names. This prevents dangerous logical conflicts before they can occur.
     - **Deterministic Queuing:** A First-In-First-Out (FIFO) queue for conflicting tasks, which ensures that workflows proceed in a predictable order and that the assumptions of early tasks are preserved.
 
 - **Secondary Mitigation: The Decoupled UI Signaling System.**

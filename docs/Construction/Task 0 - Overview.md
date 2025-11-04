@@ -99,13 +99,27 @@
 
 ### **Phase 6: Future Development (Post-V1)**
 
-**Goal:** Plan for the next major version by tackling features that were explicitly excluded from V1.
+**Goal:** Plan for the next major version by tackling features that were explicitly excluded from V1. This phase focuses on making the entire RoboSmith system not just usable, but truly accessible and powerful for a wider audience.
 
-*   **6.1. Graphical Workflow Editor:**
-    *   Design and build a GUI for creating and managing the `workflows.json` manifest.
+*   **6.1. The "Workflow Studio": A Graphical Editor**
+    *   **Vision:** To fully realize the "Principle of Apparent Simplicity" by providing a visual, drag-and-drop interface for designing, editing, and managing the `workflows.json` manifest. This "Workflow Studio" will be a dedicated WebView panel that transforms the text-based configuration into a "living Visio diagram" that users can directly manipulate.
+    *   **Core Features:**
+        *   **Visual Canvas:** A main canvas where users can build their workflow as a flowchart.
+        *   **Block Palette:** A toolbar containing all available Block types (e.g., `AI Coder`, `Test Runner`, `File Writer`) that can be dragged onto the canvas.
+        *   **Interactive Connectors:** Users can draw arrows between blocks to define Transitions.
+        *   **Inspector Panel:** Selecting a block or an arrow will open an inspector panel.
+            *   Selecting a **block** allows the user to configure its properties (e.g., which `worker` to use).
+            *   Selecting an **arrow** allows the user to define the `on_signal` keyword that triggers that specific state transition.
+    *   **The Manifest as the Source of Truth:** The Studio is a user-friendly abstraction. When a user saves their work, the visual graph is compiled into the structured, version-controllable `workflows.json` file. This ensures the system remains fundamentally text-based and auditable.
 
-*   **6.2. Architectural Review Layer:**
-    *   Implement the "Scaffolding" and "Refactoring Proposal" features.
+*   **6.2. The Workflow Library: Save and Recall Workflows**
+    *   **Vision:** To allow users to create a reusable, personal library of their most effective automation patterns.
+    *   **Core Features:**
+        *   **`[Save to Library]`:** A function within the Workflow Studio that saves the current visual workflow as a named template (e.g., "TDD Loop with Documentation") to a global storage location managed by the extension.
+        *   **`[Load from Library]`:** When creating a new workflow, the user can choose to start from a blank canvas or from one of their saved templates, instantly bootstrapping their automation process.
 
-*   **6.3. Broader SCM Support:**
-    *   Investigate and implement support for non-Git projects.
+*   **6.3. Architectural Review Layer:**
+    *   Implement the "Scaffolding" and "Refactoring Proposal" features, which insert a manual architectural sign-off step before implementation.
+
+*   **6.4. Broader SCM Support:**
+    *   Investigate and implement support for non-Git projects (e.g., Perforce, SVN) or projects with no version control, likely using a simple file-copying sandbox model as a fallback.

@@ -30,42 +30,7 @@ export interface TestResultSegment extends ContextSegment {
 This feature is realized through two primary components: a new internal Worker responsible for executing tests, and the manifest pattern that orchestrates the workflow.
 
 ### Component 1: The `Internal:TestRunner` Worker
-*   **Architectural Role:** `Utility` (Stateless Façade)
-*   **Core Responsibilities:**
-    *   To act as a simple, reliable wrapper around the `vitest` command-line interface.
-    *   To execute the test suite for the current Git Worktree.
-    *   To capture all `stdout` and `stderr` output from the test process.
-    *   To parse the outcome (pass or fail) based on the process exit code.
-    *   To emit a clear, binary signal (`SIGNAL:SUCCESS` or `SIGNAL:FAILURE`) and package the raw test output into the `ExecutionPayload`.
-
-*   **Public API (TypeScript Signature):**
-    This is an internal Worker, not a public service. Its contract is defined by the input it expects from the Orchestrator and the output it produces.
-    ```typescript
-    // The Worker is invoked by the Orchestrator with the current memory context.
-    // It is expected to return a signal and a new payload.
-    interface TestRunnerInput {
-      system_metadata: { worktree_path: string; };
-    }
-    interface TestRunnerOutput {
-      signal: 'SIGNAL:SUCCESS' | 'SIGNAL:FAILURE';
-      new_payload: ExecutionPayload; // The payload will contain the TestResultSegment
-    }
-    ```
-
-*   **Detailed Behavioral Logic (The Algorithm):**
-    1.  The `Internal:TestRunner` Worker is invoked by the Orchestrator.
-    2.  It uses the `worktree_path` from the `System Metadata` to determine the correct working directory.
-    3.  It spawns `vitest` as a child process within that directory (e.g., `vitest run --reporter=verbose`).
-    4.  It diligently captures and buffers all data from the child process's `stdout` and `stderr` streams into a single log string.
-    5.  It waits for the child process to exit and captures its exit code.
-    6.  **If the exit code is `0`:** The Worker emits the `SIGNAL:SUCCESS` signal. It creates a `TestResultSegment` with `outcome: 'PASS'` and adds it to the `ExecutionPayload`.
-    7.  **If the exit code is non-zero:** The Worker emits the `SIGNAL:FAILURE` signal. It creates a `TestResultSegment` with `outcome: 'FAIL'` and the full, captured log as its content, and adds this to the `ExecutionPayload`.
-
-*   **Mandatory Testing Criteria:**
-    *   The Worker must correctly spawn a child process in the specified directory.
-    *   It must correctly emit `SIGNAL:SUCCESS` when the mocked child process exits with code `0`.
-    *   It must correctly emit `SIGNAL:FAILURE` and include the complete, captured log in the payload when the mocked child process exits with a non-zero code.
-    *   It must gracefully handle a scenario where the `vitest` command itself cannot be found or fails to start.
+*   This workflow pattern is driven by the Internal:TestRunner worker, whose detailed specification is defined in docs/Internal_Workers_and_Actions.md
 
 ---
 

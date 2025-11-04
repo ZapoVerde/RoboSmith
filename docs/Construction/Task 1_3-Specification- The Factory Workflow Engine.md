@@ -110,10 +110,16 @@ export interface NodeDefinition {
     4.  **Step B: Execute Block.** The Orchestrator invokes the specified Worker, passing it the fully assembled context. It waits for the Worker to return its output, which consists of a `(new ExecutionPayload, Signal)` tuple.
     5.  **Step C: Lookup Transition.** The Orchestrator searches the current Block's `transitions` table for an entry whose `on_signal` property exactly matches the `Signal` returned by the Worker.
     6.  **Step D: The Fallback.** If no direct match is found, the Orchestrator performs a second lookup for the reserved `on_signal: "SIGNAL:FAIL_DEFAULT"`. If this fallback transition is found, it is used. If neither a direct match nor a default is found, a catastrophic, unrecoverable error is thrown, terminating the workflow.
-    7.  **Step E: Execute Action.** The Orchestrator passes the chosen transition's `action` string (e.g., `JUMP:TargetId`, `CALL:TargetId`, `RETURN`) to its internal `ActionHandler`.
-        *   `JUMP`: The `currentBlockId` is updated to the `TargetId`.
-        *   `CALL`: The `ActionHandler` determines the return address (the next logical Block in the current sequence), pushes it to the `ReturnStack`, and then performs a `JUMP` to the `TargetId`.
-        *   `RETURN`: The `ActionHandler` pops the last address from the `ReturnStack` and performs a `JUMP` to it.
+    7.  **Step E: Execute Action via the `ActionHandler`** The Orchestrator now delegates the parsing and execution of the chosen transition's `action` string to the stateless `ActionHandler` utility. This maintains a clean separation of concerns, keeping the Orchestrator focused on managing the loop and state, while the `ActionHandler` owns the logic of the action DSL. The definitive specification for the Action DSL and its commands is located in `docs/Construction/Internal_Workers_and_Actions.md`.
+    1.  **Prepare Action Parameters:** The Orchestrator prepares an `ActionParams` object containing the `action` string (e.g., `JUMP:TargetId`), its current `returnStack`, and, if the action is a `CALL`, a calculated `returnAddress`. The `returnAddress` is determined by finding the next logical block in the current sequence, which will be executed after the subroutine returns.
+    2.  **Invoke the Handler:** The Orchestrator calls `executeAction(params)` and awaits the `ActionResult`.
+    3.  **Update State:** The Orchestrator then destructively updates its own internal state based on the result from the `ActionHandler`:
+        *   **For a `JUMP` action:** The handler returns the target ID. The Orchestrator updates its `currentBlockId` to this new ID. The `ReturnStack` is unchanged.
+        *   **For a `CALL` action:** The handler pushes the provided `returnAddress` onto the stack and returns the target node's entry block ID. The Orchestrator updates its `ReturnStack` to the new, deeper stack and updates its `currentBlockId` to the target.
+        *   **For a `RETURN` action:** The handler pops the last address from the stack and returns it. The Orchestrator updates its `ReturnStack` to the new, shallower stack and updates its `currentBlockId` to the popped address.
+4.  **Handle Termination:** If the `ActionHandler` returns a `null` value for `nextBlockId` (which occurs on a `RETURN` from an empty stack), the Orchestrator's `currentBlockId` is set to `null`, which will cause the main execution loop to terminate gracefully after this cycle.
+5.  The loop then repeats from Step A with the new `currentBlockId`.
+    
     8.  The loop repeats from Step A with the new `currentBlockId`. If a Block has no transitions or an action results in an empty `currentBlockId`, the loop terminates.
 
 *   **Mandatory Testing Criteria:**

@@ -1,22 +1,20 @@
 
----
-
 # Specification: Git Worktree Manager Service
 
 ## 1. High-Level Summary
-This specification defines the `GitWorktreeManager`, the foundational service for ensuring safety and parallelism in RoboSmith. Its core purpose is to act as the "foreman" for the Git repository, creating, managing, and destroying isolated development sandboxes (Git worktrees) for each user-initiated workflow.
+This specification defines the `GitWorktreeManager`, the foundational service for ensuring safety, parallelism, and robustness in RoboSmith. Its core purpose is to act as the "foreman" for the Git repository, creating, managing, and destroying isolated development sandboxes (Git worktrees) for each user-initiated workflow.
 
-This service is the direct implementation of the architecture laid out in `GitWorktree_System.md`. It abstracts all raw Git commands into a clean, reliable API and is responsible for running the proactive conflict detection scan to prevent dangerous, overlapping file modifications before they can occur.
+This service is the direct implementation of the architecture laid out in `GitWorktree_System.md`. It abstracts all raw Git commands into a clean API, runs the proactive conflict detection scan, and, most critically, **persists its state and performs a self-healing reconciliation loop on startup** to guarantee its in-memory state is always a perfect reflection of the file system.
 
 ## 2. Core Data Contracts
-These contracts define the primary entities and results that the `GitWorktreeManager` operates on.
+These contracts define the primary entities and results that the `GitWorktreeManager` operates on. They remain stable.
 
 ```typescript
 /**
  * Represents a single, managed Git worktree session.
  */
 export interface WorktreeSession {
-  /** A unique identifier for the session (and its tab). */
+  /** A unique identifier for the session (and its tab). Matches the worktree's directory name. */
   sessionId: string;
   /** The absolute path to the worktree's root directory. */
   worktreePath: string;
@@ -24,15 +22,15 @@ export interface WorktreeSession {
   branchName: string;
   /** The list of "seed files" that this session intends to modify. */
   changePlan: string[];
+  /** The current status of the workflow (e.g., Running, Held). */
+  status: 'Running' | 'Queued' | 'Held';
 }
 
 /**
  * Defines the arguments needed to create a new worktree.
  */
 export interface CreateWorktreeArgs {
-  /** The list of files the new session plans to modify. */
   changePlan: string[];
-  /** The base branch to create the new worktree from (e.g., 'main'). */
   baseBranch: string;
 }
 
@@ -40,26 +38,20 @@ export interface CreateWorktreeArgs {
  * Represents the outcome of a conflict scan.
  */
 export type ConflictScanResult =
-  | {
-      status: 'CLEAR';
-    }
-  | {
-      status: 'CLASH';
-      conflictingSessionId: string;
-      conflictingFiles: string[];
-    };
+  | { status: 'CLEAR' }
+  | { status: 'CLASH', conflictingSessionId: string, conflictingFiles: string[] };
 ```
 
 ## 3. Component Specification
 
 ### Component: GitWorktreeManager
-*   **Architectural Role:** Orchestrator (for Git Operations)
+*   **Architectural Role:** Orchestrator (for Git Operations & Workspace State)
 *   **Core Responsibilities:**
+    *   **NEW: Perform a startup reconciliation loop** to synchronize its state with the file system, handling "zombie" and "ghost" worktrees.
     *   Manage the lifecycle of all Git worktrees, including creation, tracking, and removal.
-    *   Maintain an in-memory manifest of all active `WorktreeSession` objects.
-    *   Execute the proactive "seed file" conflict scan to identify high-risk modification overlaps between sessions.
+    *   **NEW: Persist its manifest of active `WorktreeSession` objects** using the `vscode.ExtensionContext.globalState` API.
+    *   Execute the proactive "seed file" conflict scan to identify high-risk modification overlaps.
     *   Abstract all `git` command-line executions into a robust, error-handling API.
-    *   Provide a mechanism to retrieve the state of all currently active sessions.
 
 *   **Public API (TypeScript Signature):**
     ```typescript
@@ -70,52 +62,60 @@ export type ConflictScanResult =
       public static getInstance(): GitWorktreeManager;
 
       /**
-       * Creates a new Git worktree, runs an initial conflict scan, and adds it to the manifest.
-       * @param args The base branch and initial change plan for the new session.
-       * @returns A promise that resolves with the newly created WorktreeSession.
-       * @throws An error if the underlying 'git worktree add' command fails.
+       * NEW: Initializes the service. MUST be called once on extension activation.
+       * Runs the reconciliation loop and loads the persisted state.
+       * @param context The VS Code ExtensionContext, required for state persistence.
+       */
+      public async initialize(context: vscode.ExtensionContext): Promise<void>;
+
+      /**
+       * Creates a new Git worktree, persists the state, and returns the new session.
        */
       public async createWorktree(args: CreateWorktreeArgs): Promise<WorktreeSession>;
 
       /**
-       * Removes a Git worktree from the filesystem and the internal manifest.
-       * @param sessionId The ID of the session to remove.
-       * @returns A promise that resolves when cleanup is complete.
+       * Removes a Git worktree from the filesystem and updates the persisted state.
        */
       public async removeWorktree(sessionId: string): Promise<void>;
 
       /**
-       * Scans a new change plan against all other active sessions to detect file clashes.
-       * @param newChangePlan The list of files for the proposed new session.
-       * @returns A promise that resolves with a ConflictScanResult.
+       * Scans a new change plan against all other active sessions.
        */
       public async runConflictScan(newChangePlan: string[]): Promise<ConflictScanResult>;
     }
     ```
 
 *   **Detailed Behavioral Logic (The Algorithm):**
-    1.  **`createWorktree`:**
-        a.  It generates a unique UUID to serve as the `sessionId`.
-        b.  It constructs a unique `branchName` and `worktreePath` based on the UUID (e.g., `robo-smith/session-uuid` and `.worktrees/session-uuid`).
-        c.  It executes the command `git worktree add -b <branchName> <worktreePath> <baseBranch>`. This entire operation is wrapped in a `try/catch` block. If the command fails, it throws a detailed `GitCommandError`.
-        d.  Upon success, it creates a new `WorktreeSession` object containing the `sessionId`, paths, and the provided `changePlan`.
-        e.  It stores this new session object in a private, internal `Map<string, WorktreeSession>`.
-        f.  It resolves the promise with the newly created `WorktreeSession` object.
-    2.  **`removeWorktree`:**
-        a.  It looks up the `WorktreeSession` in its internal map using the `sessionId`. If not found, it logs a warning and returns.
-        b.  It executes the command `git worktree remove <worktreePath>`. This is wrapped in a `try/catch` block to handle cases where the worktree has uncommitted changes.
-        c.  It also executes `git branch -d <branchName>` to clean up the associated branch.
-        d.  Upon success, it removes the session from its internal map.
-    3.  **`runConflictScan`:**
-        a.  This method is a pure, read-only check.
-        b.  It iterates through every existing `WorktreeSession` in its internal map.
-        c.  For each existing session, it performs a simple array intersection between its `changePlan` and the `newChangePlan` provided as an argument.
-        d.  If an intersection with one or more files is found, it **immediately** stops scanning and resolves the promise with a `{ status: 'CLASH', ... }` object, detailing which session and which files are in conflict.
-        e.  If it successfully iterates through all other sessions without finding any intersections, it resolves the promise with a `{ status: 'CLEAR' }` object.
+
+    1.  **`initialize(context)` (NEW AND CRITICAL):**
+        a.  **Read Ground Truth:** Uses `vscode.workspace.fs.readDirectory` to get a list of all actual directories inside `.worktrees/`.
+        b.  **Read Cached State:** Uses `context.globalState.get()` to load its last-known list of sessions.
+        c.  **Find Zombies:** Compares the two lists to find directories that exist on disk but not in the state (from a crash). It logs a warning for each one.
+        d.  **Find Ghosts:** Finds entries in the state that no longer exist on disk (manual deletion). It removes these "ghost" entries from its internal state object.
+        e.  **Persist & Finalize:** If any ghosts were removed, it calls `context.globalState.update()` to save the cleaned state. It then loads the final, correct state into its private in-memory `Map` for fast access.
+
+    2.  **`createWorktree(args)`:**
+        a.  Generates a unique UUID to serve as the `sessionId` (this will also be the directory and branch name).
+        b.  Executes the `git worktree add ...` command. Throws an error on failure.
+        c.  Upon success, creates a new `WorktreeSession` object.
+        d.  Adds the new session to its internal `Map`.
+        e.  **NEW:** Calls a private `_persistState()` method, which uses `context.globalState.update()` to save the entire, updated map to disk.
+        f.  Resolves the promise with the new `WorktreeSession`.
+
+    3.  **`removeWorktree(sessionId)`:**
+        a.  Looks up the session in its internal map.
+        b.  Executes the `git worktree remove ...` and `git branch -d ...` commands.
+        c.  Upon success, removes the session from its internal `Map`.
+        d.  **NEW:** Calls the private `_persistState()` method to save the change.
+
+    4.  **`runConflictScan(newChangePlan)`:**
+        a.  This logic is unchanged. It remains a pure, read-only check that iterates over the now-persistent and reconciled internal map.
 
 *   **Mandatory Testing Criteria:**
-    *   A "happy path" test must verify that `createWorktree` executes the correct `git worktree add` command and returns a valid `WorktreeSession` object.
-    *   A test must verify that `removeWorktree` executes the correct `git worktree remove` and `git branch -d` commands.
-    *   An error path test must verify that if the underlying `git` command fails during creation, the promise is rejected with a specific error.
-    *   A conflict scan test must verify that `runConflictScan` returns a `CLEAR` status when no other sessions exist.
-    *   A conflict scan test must verify that `runConflictScan` returns a `CLASH` status when a new change plan shares even one file with an existing session's plan. The result must correctly identify the conflicting session and file.
+    *   **NEW:** A test for `initialize` must verify that it correctly identifies "zombie" directories from a mock file system.
+    *   **NEW:** A test for `initialize` must verify that it correctly removes "ghost" entries from a mock `globalState`.
+    *   **NEW:** A test must verify that `createWorktree` makes a call to the mock `globalState.update` method upon success.
+    *   **NEW:** A test must verify that `removeWorktree` also calls `globalState.update` upon success.
+    *   A test must verify that `createWorktree` executes the correct `git worktree add` command.
+    *   A test must verify that `removeWorktree` executes the correct cleanup commands.
+    *   A test must verify that `runConflictScan` returns a `CLASH` status when a file overlap is detected in the active sessions.

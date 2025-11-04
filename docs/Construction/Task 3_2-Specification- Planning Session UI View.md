@@ -1,92 +1,108 @@
 
----
-
-# Specification: "Planning Session" UI View
+# Specification: The Interactive Mission Control Panel
 
 ## 1. High-Level Summary
-This specification defines the **"Planning Session" view**, the primary UI component for visualizing the real-time execution of a single workflow node. This component is the "mission control" screen that a user watches as the `Orchestrator` engine carries out its work.
+This specification defines the primary UI for supervising an active RoboSmith workflow: the **Interactive Mission Control Panel**. This component is a rich, dynamic WebView that appears in the main editor area and serves as the user's "director's chair," providing a transparent, real-time view of the automation engine's execution.
 
-Its core purpose is to be a reactive, read-only display that translates the `PlanningState` object (sent from the Extension Host) into a clear, intuitive, and step-by-step visualization of the workflow's progress. It will also present the user with supervisor controls (`[Accept]`, `[Revise]`, `[Abort]`) but *only* when the workflow is explicitly halted and requires human intervention.
+Its core purpose is to be a "living Visio diagram" of the workflow. It replaces a simple text log with an interactive, graphical state machine, fulfilling the "Principle of Apparent Simplicity" by making a complex backend process intuitive and observable. It is the central hub from which the user can understand, debug, and take control of the AI's behavior.
 
 ## 2. Core Data Contracts
-This view is a "dumb" component driven entirely by the `PlanningState` object, which is defined in the shared `types.ts` file.
+This view is a "dumb" component driven entirely by a single, rich state object sent from the Extension Host. This object contains all the information necessary to render the entire interactive experience.
 
 ```typescript
 /**
- * Represents the complete state of an executing workflow node, sent from the
- * Extension Host to the WebView. This is the sole input for this component.
+ * Represents the complete, real-time state of the Mission Control panel,
+ * sent from the Extension Host to the WebView with every update.
  */
-export interface PlanningState {
-  /** The ID of the node currently being executed. */
-  nodeId: string;
-  /** The zero-based index of the step currently in progress. */
-  currentStepIndex: number;
-  /** An array representing the state of all steps in the current node. */
-  steps: Array<{
-    name: string;
-    status: 'pending' | 'in_progress' | 'action_required' | 'complete';
+export interface WorkflowViewState {
+  /**
+   * The static blueprint of the currently executing workflow node's graph.
+   * This is used to draw the flowchart.
+   */
+  graph: {
+    nodeId: string;
+    blocks: Record<string, { name: string }>; // e.g., { "Block:GenerateCode": { name: "Generate Code" } }
+    transitions: Array<{ from: string; to: string; signal: string }>; // The arrows and their labels
+  };
+
+  /**
+   * A map of the live status for each block in the graph.
+   * e.g., { "Block:GenerateCode": "complete", "Block:RunTests": "active" }
+   */
+  statuses: Record<string, 'complete' | 'active' | 'pending' | 'failed'>;
+
+  /**
+   * The most recent transition that occurred, used to animate the "lit path."
+   * e.g., { fromBlock: "Block:GenerateCode", toBlock: "Block:RunTests", signal: "SIGNAL:SUCCESS" }
+   */
+  lastTransition: {
+    fromBlock: string;
+    toBlock: string;
+    signal: string;
+  } | null;
+
+  /**
+   * A complete, detailed log of all inputs and outputs for every block that
+   * has executed. Used to populate the inspector panels when a block is selected.
+   */
+  executionLog: Record<string, {
+    context: ContextSegment[]; // The inputs ("little icons" data)
+    conversation: ContextSegment[]; // The outputs (chatbox data)
   }>;
-  /** The string output from the most recently completed step. */
-  lastOutput: string | null;
-  /** A flag indicating if the workflow is paused and waiting for user input. */
-  isHalted: boolean;
-  /** An error message if the workflow halted due to a failure. */
-  errorMessage: string | null;
+
+  /**
+   * A summary of all active workflows, used to render the top status ticker.
+   */
+  allWorkflowsStatus: Array<{
+    sessionId: string;
+    name: string;
+    health: 'GREEN' | 'AMBER' | 'RED';
+    queue: 'IDLE' | 'QUEUED' | 'RUNNING' | 'COMPLETE';
+  }>;
 }
 ```
 
 ## 3. Component Specification
 
-### Component: PlanningSessionView (Svelte)
+### Component: MissionControlPanel (Svelte)
 *   **Architectural Role:** UI Component (View)
 *   **Core Responsibilities:**
-    *   Render a list of all steps for the current workflow node.
-    *   Visually represent the status of each step (`pending`, `in_progress`, etc.) using icons, colors, or text styles.
-    *   Display the output of the last completed step in a formatted text area.
-    *   Conditionally render a set of "Supervisor Controls" (buttons) only when the `isHalted` flag in the `PlanningState` is `true`.
-    *   Emit user action events when a supervisor control button is clicked.
+    *   Render the read-only **Status Ticker** at the top of the panel, showing the status of all active workflows.
+    *   Render the **interactive workflow graph** (the "Visio diagram") based on the `graph` data.
+    *   Apply dynamic styles (colors, borders, animations) to the graph's blocks and arrows based on the `statuses` and `lastTransition` data.
+    *   Manage the local UI state for which block is currently selected by the user.
+    *   Emit an event whenever a block is selected, so that other UI panels (like the Chatbox) can update themselves.
 
 *   **Public API (Svelte Component Signature):**
     ```svelte
-    <!-- PlanningSessionView.svelte -->
+    <!-- MissionControlPanel.svelte -->
     <script lang="ts">
-      import { createEventDispatcher } from 'svelte';
-      import type { PlanningState } from './types';
+      import type { WorkflowViewState } from './types';
 
       /**
-       * The real-time state of the workflow, passed in as a prop.
+       * The complete, real-time state of the UI, passed in as a prop.
        */
-      export let state: PlanningState;
-
-      const dispatch = createEventDispatcher();
-
-      function handleUserAction(action: 'proceed' | 'revise' | 'abort') {
-        dispatch('userAction', { action });
-      }
+      export let state: WorkflowViewState;
     </script>
-
-    <!-- The component will render the UI based on the `state` prop -->
     ```
 
 *   **Detailed Behavioral Logic (The Algorithm):**
-    1.  The component receives the `PlanningState` object as its `state` prop. This triggers a re-render.
-    2.  **Step List Rendering:** It iterates through the `state.steps` array. For each `step` object, it renders a list item.
-        a.  The visual style of the list item will change based on the `step.status`. For example:
-            *   `pending`: Grayed out text.
-            *   `in_progress`: A spinner icon and highlighted text.
-            *   `complete`: A checkmark icon (✅).
-            *   `action_required`: An error/warning icon (🔴) and bold text.
-    3.  **Last Output Display:** It will render the content of `state.lastOutput` inside a read-only text area or a pre-formatted block (e.g., `<pre>`). If `lastOutput` is `null`, this area is hidden or shows a placeholder.
-    4.  **Error Message Display:** If `state.errorMessage` is not `null`, it will be displayed prominently in a styled "alert" or "callout" box to draw the user's attention.
-    5.  **Conditional Supervisor Controls:** The component will contain a section for control buttons that is rendered *if and only if* `state.isHalted` is `true`. This section will contain three buttons:
-        *   `[Accept]`: The primary "go" button.
-        *   `[Revise]`: A button to signal that the user wants to provide feedback.
-        *   `[Abort]`: A dangerous action to terminate the workflow.
-    6.  **Event Emission:** When any of the supervisor control buttons are clicked, the corresponding `handleUserAction` function is called, which dispatches a `userAction` event. The payload will be an object containing the specific action chosen by the user (e.g., `{ action: 'proceed' }`).
+    1.  The component receives the `WorkflowViewState` object as its `state` prop, triggering a re-render.
+    2.  **Status Ticker Rendering:** It iterates through the `state.allWorkflowsStatus` array to render the read-only "lozenge" for each workflow at the top of the panel. The currently active workflow is highlighted.
+    3.  **Workflow Graph Rendering:**
+        a.  The component uses a rendering library (e.g., Mermaid.js) to generate an SVG flowchart from the `state.graph.blocks` and `state.graph.transitions` data.
+        b.  The `signal` from each transition is used as the label for the corresponding arrow.
+    4.  **Live State Visualization:**
+        a.  After rendering, the component iterates through the `state.statuses` map. For each `blockId`, it finds the corresponding element in the SVG and applies a CSS class (e.g., `status-complete`, `status-active`) to change its border color and icon.
+        b.  If `state.lastTransition` is present, it finds the corresponding arrow element and applies a brief "glow" animation to visualize the "lit path."
+    5.  **Interactivity:**
+        a.  The component attaches a click event listener to each block element in the SVG graph.
+        b.  When a user clicks a block, the handler function:
+            i.   Updates a local state variable, `selectedBlockId`, with the ID of the clicked block. This will visually highlight the block in the UI.
+            ii.  Dispatches a custom `blockSelected` event to the rest of the application, with a payload containing the `selectedBlockId` and the relevant data from `state.executionLog`. This allows the Chatbox and Context Inspector panels to filter their content accordingly.
 
 *   **Mandatory Testing Criteria:**
-    *   **Status Rendering:** A component test must verify that given a `PlanningState` where a step has a status of `'in_progress'`, a corresponding "spinner" element is visible in the rendered output.
-    *   **Output Display:** A test must verify that the content of the `state.lastOutput` prop is correctly rendered within a designated element on the screen.
-    *   **Controls Visibility (Hidden):** A test must verify that when `isHalted` is `false`, the supervisor control buttons (`[Accept]`, `[Revise]`, etc.) are **not** present in the DOM.
-    *   **Controls Visibility (Shown):** A test must verify that when `isHalted` is `true`, the supervisor control buttons **are** present in the DOM.
-    *   **Event Emission:** A test must verify that clicking the `[Accept]` button dispatches a `userAction` event with the payload `{ action: 'proceed' }`.
+    *   **Graph Rendering:** A component test must verify that given a `WorkflowViewState` with 2 blocks and 1 transition, the rendered output contains the correct number of nodes and an arrow with the correct `signal` label.
+    *   **Status Styling:** A test must verify that given a `statuses` map where a block is `'failed'`, the corresponding rendered element has the `status-failed` CSS class.
+    *   **"Lit Path" Animation:** A test must verify that when the `lastTransition` prop is updated, the correct arrow element temporarily receives an "active-transition" CSS class.
+    *   **Event Emission:** A test must verify that clicking on a rendered block element dispatches a `blockSelected` event containing the correct `blockId` as its payload.

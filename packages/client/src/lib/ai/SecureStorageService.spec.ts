@@ -24,7 +24,7 @@ describe('SecureStorageService', () => {
   let service: SecureStorageService;
 
   beforeEach(() => {
-    // Create a fully-typed mock of the SecretStorage interface
+    // Create a fully-typed mock of the SecretStorage interface 
     mockSecretStorage = {
       get: vi.fn(),
       store: vi.fn(),
