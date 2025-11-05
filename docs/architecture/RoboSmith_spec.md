@@ -337,13 +337,24 @@ This section defines the implementation requirements for the core backend servic
 
 #### 3.3.5. Programmable Context Partitioner (Integration)
 
-- **Authoritative Document:** The complete architecture, modification plan, and data flow for the `roberto-mcp` integration is specified in **`docs/architecture/r-mcp_Integration_and_Strategy.md`**. The detailed implementation contract for the service itself is defined in **`docs/Construction/Task 1_2-Specification- Programmable Context Partitioner Service.md`**.
-- **Implementation:** A singleton class `ContextPartitionerService` will be instantiated.
-- **Interface:** It MUST expose a discrete, async method for each `r-mcp` tool that the system requires (e.g., `getFileOutline(args)`, `getSymbolReferences(args)`).
-- **Logic:** This service is a client and query orchestrator for the `roberto-mcp` binary, operating in a "One-Shot with Persistent Cache" mode.
-  - It MUST translate method calls into the correct command-line arguments for `roberto-mcp`.
-  - It MUST manage a **concurrency-limited queue** to prevent system overload from too many simultaneous analysis processes.
-  - It will spawn the binary as a child process for each dequeued request, capture the `stdout` (JSON), and parse the result.
+- **Authoritative Document:** The complete architecture and detailed component contracts for the `roberto-mcp` integration are specified in **`docs/Construction/Task 1_2-Specification- Programmable Context Partitioner Service.md`**.
+- **Architectural Model: "On-Demand Server-per-Worktree"**
+  - The system fully leverages `roberto-mcp`'s native server capabilities, including its built-in file watcher and on-disk caching for high performance. To optimize resource usage, a dedicated server instance is only run for workflows that are actively executing.
+- **Implementation:** The integration is a two-part system composed of two distinct singleton services.
+
+- **Component 1: `R_Mcp_ServerManager`**
+  - **Architectural Role:** `Process Orchestrator`
+  - **Responsibilities:**
+    - To manage the complete lifecycle of all `roberto-mcp` server processes.
+    - It maintains a map of running server instances, with one dedicated server per *active* Git worktree.
+    - It programmatically "spins up" a server when a workflow transitions to a `Running` state and "spins it down" when the workflow becomes inactive (`Held`, `Completed`), freeing system resources.
+
+- **Component 2: `ContextPartitionerService`**
+  - **Architectural Role:** `Stateless Façade`
+  - **Responsibilities:**
+    - To act as the exclusive query router for all context requests.
+    - It translates high-level method calls from the `Orchestrator` (e.g., `getFileOutline(args)`) into the appropriate JSON-RPC `tools/call` messages.
+    - It is completely stateless and delegates all process-management concerns by requesting the correct, active server client from the `R_Mcp_ServerManager` before sending a query.
 
 #### 3.3.6. Inspector Panels
 

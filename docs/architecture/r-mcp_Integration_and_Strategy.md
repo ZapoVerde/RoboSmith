@@ -1,17 +1,21 @@
 
-# **`roberto-mcp`: Integration & Strategy (V2 - Detailed Engineering Spec)**
+---
+
+# **`roberto-mcp`: Integration & Strategy (Definitive Architecture)**
 
 ## 1. Executive Summary & Rationale
 
-This document provides the definitive engineering specification for integrating the `roberto-mcp` Rust server. It supersedes all previous high-level discussions.
+This document provides the definitive engineering specification for integrating the `roberto-mcp` Rust engine. It supersedes all previous discussions and formally adopts the **"On-Demand Server-per-Worktree"** model.
 
-The project has formally adopted the **"One-Shot with Persistent Cache"** model. This architecture provides the necessary semantic code analysis with a "good enough" performance profile for our asynchronous workflow, while drastically reducing the memory overhead and implementation complexity associated with a persistent server-per-tab model.
+This architecture is designed to fully leverage the native, high-performance capabilities of `roberto-mcp` as a persistent server, including its built-in file watcher and on-disk caching, which provide near-instantaneous incremental updates.
 
-This document contains the explicit modification plan for the `roberto-mcp` binary and the precise data flow diagrams and algorithms for the consuming `ContextPartitionerService`. It is the authoritative source of truth for this integration.
+To balance performance with resource efficiency, the extension will not run a server for every worktree at all times. Instead, a new **`R_Mcp_ServerManager`** service will be responsible for the lifecycle of these server processes. It will dynamically "spin up" a dedicated server instance only when a workflow becomes active (`Running`) and "spin it down" when the workflow becomes inactive (`Held`, `Completed`). This on-demand approach provides the sub-second query performance of a hot, in-memory cache precisely when it's needed, while conserving memory and CPU resources for all inactive tasks.
 
-## 2. Core MCP Data Contracts
+This strategy completely eliminates the need for a manual concurrency queue and any modifications to the `roberto-mcp` binary, resulting in a simpler, more robust, and higher-performance implementation.
 
-For the `ContextPartitionerService` to function, it must adhere to the JSON contracts of the `roberto-mcp` tools. The following TypeScript interfaces represent the expected shapes for the most critical tools.
+## 2. Core `r-mcp` Data Contracts
+
+The `ContextPartitionerService` communicates with `r-mcp` server instances via JSON-RPC. The following TypeScript interfaces define the expected request and response shapes for the critical `r-mcp` tools.
 
 ```typescript
 // For the 'get_file_outline' tool
@@ -52,177 +56,112 @@ interface CodeSearchResult {
 }
 ```
 
-## 3. `roberto-mcp`: The Modification Plan
+## 3. System Architecture
 
-To support the "One-Shot" model, the `roberto-mcp` binary requires a targeted modification to add a command-line execution path that coexists with the existing persistent server path.
+The integration is built on three core components: the `GitWorktreeManager`, which signals state changes; the new `R_Mcp_ServerManager`, which manages the server processes; and the refactored `ContextPartitionerService`, which routes queries to the correct running server.
 
-### 3.1. File-by-File Change Analysis
-| File Path | Change Required | Rationale |
-| :--- | :--- | :--- |
-| **`Cargo.toml`** | **Add Dependency** | The `clap` crate (v4.5+) with the `derive` feature is required for robust, structured command-line argument parsing. |
-| **`src/main.rs`** | **Major Modification** | The `main` function will be refactored to parse CLI arguments first. Based on these arguments, it will either enter the new "one-shot" logic path or fall back to the existing persistent server loop. |
-| **`src/mcp/tools.rs`** | **Minor Refactoring** | The core `match` statement that routes a tool name to its implementation function must be extracted into a standalone, reusable `async` function. This allows both the server and one-shot modes to share the exact same tool execution logic, preventing code duplication. |
-| **`tests/`** | **Add New Test File** | A new integration test, `oneshot_mode_test.rs`, will be created to validate the new CLI entry point using `assert_cmd`. |
+### Component 1: The `R_Mcp_ServerManager` (The Process Orchestrator)
+*   **Architectural Role:** `Process Orchestrator`
+*   **Core Responsibilities:**
+    *   To maintain an in-memory map of all active `roberto-mcp` server processes, keyed by their `worktreePath`.
+    *   To manage the complete lifecycle of each server process based on external commands.
+    *   To expose a clean, asynchronous API for spinning servers up and down.
+    *   To provide a synchronous method for retrieving the JSON-RPC client for an already-running server.
+*   **Public API (TypeScript Signature):**
+    ```typescript
+    export class R_Mcp_ServerManager {
+      public static getInstance(): R_Mcp_ServerManager;
 
-### 3.2. Detailed Implementation of the "One-Shot" Path
+      /**
+       * Spawns an r-mcp server, sends the initial 'index_code' command,
+       * and waits for the initial indexing to complete. Leverages r-mcp's
+       * on-disk cache for fast "warm starts".
+       */
+      public async spinUpServer(worktreePath: string): Promise<void>;
 
-The modification centers on a new `Cli` struct and a branch in the `main` function.
+      /**
+       * Gracefully terminates the r-mcp server process for a given worktree,
+       * freeing its memory resources. The on-disk cache remains.
+       */
+      public async spinDownServer(worktreePath: string): Promise<void>;
 
-**1. Define the CLI Structure (in `src/main.rs`):**
-
-```rust
-use clap::Parser;
-
-#[derive(Parser, Debug)]
-#[command(author, version, about, long_about = None)]
-struct Cli {
-    /// Run in one-shot mode to execute a single command and exit.
-    #[arg(long)]
-    oneshot: bool,
-
-    /// The name of the MCP tool to execute (e.g., 'get_file_outline').
-    #[arg(long, requires = "oneshot")]
-    tool: Option<String>,
-
-    /// The JSON string of parameters for the specified tool.
-    #[arg(long, requires = "oneshot")]
-    params: Option<String>,
-}
-```
-
-**2. Refactor the `main` function (in `src/main.rs`):**
-
-The `main` function will be structured to first parse these arguments.
-
-```rust
-#[tokio::main]
-async fn main() -> Result<()> {
-    // ... (logging setup)
-    
-    let cli = Cli::parse();
-
-    if cli.oneshot {
-        // --- NEW ONE-SHOT PATH ---
-        // 1. Validate and extract CLI arguments.
-        let tool_name = cli.tool.unwrap();
-        let params_json = cli.params.unwrap();
-        
-        // 2. Deserialize the JSON string into a generic JSON Value.
-        let params: serde_json::Value = serde_json::from_str(&params_json)?;
-        
-        // 3. **CRITICAL**: Initialize the core analysis engine. This reuses the
-        //    same logic the persistent server uses to find/validate/load the cache.
-        //    This is NOT a "cold" run. It's a fast, incremental-aware startup.
-        let analysis_tools = roberto_mcp::CodeAnalysisTools::new();
-        
-        // 4. Call the refactored, standalone dispatch function.
-        let result = roberto_mcp::mcp::tools::dispatch_tool_call(&analysis_tools, &tool_name, params).await;
-
-        // 5. Serialize and print the result based on success or failure.
-        match result {
-            Ok(call_result) => {
-                let output = serde_json::to_string(&call_result.content)?;
-                println!("{}", output); // Success JSON to stdout
-                Ok(())
-            }
-            Err(error_data) => {
-                let error_output = serde_json::to_string(&error_data)?;
-                eprintln!("{}", error_output); // Error JSON to stderr
-                std::process::exit(1);
-            }
-        }
-    } else {
-        // --- EXISTING PERSISTENT SERVER PATH (UNCHANGED) ---
-        // ... (existing code to start the stdio server)
+      /**
+       * Returns the JSON-RPC client for the specified worktree, allowing other
+       * services to send queries. Returns undefined if no server is running.
+       */
+      public getClientFor(worktreePath: string): JsonRpcClient | undefined;
     }
-}
-```
+    ```
 
-## 4. `ContextPartitionerService`: Data Flow & Logic
+### Component 2: The `ContextPartitionerService` (The Query Router)
+*   **Architectural Role:** `Stateless Façade`
+*   **Core Responsibilities:**
+    *   To act as the single, authoritative entry point for all context *queries*.
+    *   To be completely stateless and unaware of process management.
+    *   To translate its public method calls into the correct JSON-RPC `tools/call` message format.
+    *   To route the query to the correct, running server instance by requesting the appropriate client from the `R_Mcp_ServerManager`.
+*   **Detailed Behavioral Logic:**
+    1.  A method like `getFileOutline({ worktreePath, filePath })` is called.
+    2.  The service immediately calls `rMcpServerManager.getClientFor(worktreePath)`.
+    3.  If no client is returned (i.e., the server isn't running), it throws an error.
+    4.  It uses the obtained client to construct and send the JSON-RPC message for the `get_file_outline` tool.
+    5.  It awaits the JSON response, parses it, and returns the result.
 
-The service implements a concurrency-limited queue to manage requests to the `roberto-mcp` binary.
+## 4. Data Flow & Logic
 
-### 4.1. Data Flow 1: The Request Queueing Mechanism
+### 4.1. Data Flow 1: The On-Demand Lifecycle
 
-This diagram illustrates how multiple concurrent requests are managed to prevent system overload.
+This diagram illustrates how a server process is managed based on the workflow's state, highlighting the "cold start" and "warm start" paths enabled by `r-mcp`'s persistent on-disk cache.
 
 ```mermaid
 sequenceDiagram
-    participant C1 as Caller 1 (e.g., Clash Scan)
-    participant C2 as Caller 2 (e.g., AI Context)
-    participant C3 as Caller 3 (e.g., Next AI Step)
-    participant CPS as ContextPartitionerService
-    participant P1 as Process 1 (r-mcp)
-    participant P2 as Process 2 (r-mcp)
+    participant StateManager as State Manager <br> (e.g., WorktreeQueueManager)
+    participant ServerManager as R_Mcp_ServerManager
+    participant r_mcp as r-mcp Process
+    participant DiskCache as On-Disk Cache
 
-    C1->>+CPS: getFileOutline(args1)
-    CPS->>CPS: active < max (0 < 2) -> Proceed
-    CPS->>+P1: spawn(r-mcp, args1)
-    note right of CPS: activeProcesses = 1
-    C2->>+CPS: getSymbol(args2)
-    CPS->>CPS: active < max (1 < 2) -> Proceed
-    CPS->>+P2: spawn(r-mcp, args2)
-    note right of CPS: activeProcesses = 2
-    C3->>+CPS: codeSearch(args3)
-    CPS->>CPS: active >= max (2 >= 2) -> Enqueue
-    note right of CPS: requestQueue = [req3]
+    Note over StateManager, DiskCache: A new task begins for a new worktree.
+    StateManager->>+ServerManager: spinUpServer(worktreePath)
+    Note right of ServerManager: This is a "Cold Start".
+    ServerManager->>+r_mcp: spawn()
+    ServerManager->>r_mcp: JSON-RPC: index_code(worktreePath)
+    r_mcp->>DiskCache: Write new cache file
+    r_mcp-->>-ServerManager: Indexing Complete
+    ServerManager-->>-StateManager: resolve()
 
-    P1-->>-CPS: Process Finished (Success)
-    CPS-->>-C1: resolve(result1)
-    CPS->>CPS: finally { active-- }
-    note right of CPS: activeProcesses = 1
-    CPS->>CPS: _processQueue() -> Dequeue req3
-    CPS->>+P1: spawn(r-mcp, args3)
-    note right of CPS: activeProcesses = 2
+    Note over StateManager, DiskCache: Task is later paused/held.
+    StateManager->>+ServerManager: spinDownServer(worktreePath)
+    ServerManager->>+r_mcp: terminate()
+    r_mcp-->>-ServerManager: Process Exits (RAM freed)
+    ServerManager-->>-StateManager: resolve()
 
-    P2-->>-CPS: Process Finished (Failure)
-    CPS-->>-C2: reject(error2)
-    CPS->>CPS: finally { active-- }
-    note right of CPS: activeProcesses = 1
-    CPS->>CPS: _processQueue() -> Queue is empty
-
-    P1-->>-CPS: Process Finished (Success)
-    CPS-->>-C3: resolve(result3)
-    CPS->>CPS: finally { active-- }
-    note right of CPS: activeProcesses = 0
+    Note over StateManager, DiskCache: Task is resumed.
+    StateManager->>+ServerManager: spinUpServer(worktreePath)
+    Note right of ServerManager: This is a "Warm Start".
+    ServerManager->>+r_mcp: spawn()
+    ServerManager->>r_mcp: JSON-RPC: index_code(worktreePath)
+    r_mcp->>+DiskCache: Read existing cache file
+    DiskCache-->>-r_mcp: Cache loaded
+    Note right of r_mcp: Performs fast incremental update.
+    r_mcp-->>-ServerManager: Indexing Complete (<1s)
+    ServerManager-->>-StateManager: resolve()
 ```
 
-### 4.2. Data Flow 2: A Single "One-Shot" Execution
+### 4.2. Data Flow 2: A Single Context Query
 
-This diagram details the lifecycle of a single request that has been dequeued for execution.
+This diagram shows the clean, simple path for a context query, demonstrating the separation of concerns between the services.
 
 ```mermaid
 graph TD
-    A[CPS: _processQueue()] --> B{Dequeue Request};
-    B --> C[Construct CLI Arguments<br/>--oneshot, --tool, --params];
-    C --> D[spawn("roberto-mcp", args)];
-    D --> E{Wait for Exit};
+    A[Orchestrator] -- 1. Needs file outline --> B((ContextPartitionerService));
+    B -- 2. getClientFor(worktreePath) --> C((R_Mcp_ServerManager));
+    C -- 3. Returns active RPC client --> B;
+    B -- 4. Sends JSON-RPC query --> D[Running r-mcp Process <br> for the correct worktree];
     
-    subgraph "r-mcp Process"
-        F[Start] --> G[Validate/Load Cache];
-        G --> H[Perform Incremental Re-index<br/>(if needed)];
-        H --> I[Execute Tool Logic];
-        I --> J{Success?};
-    end
-
-    J -- Yes --> K[Print JSON to stdout<br/>Exit Code 0];
-    J -- No --> L[Print Error JSON to stderr<br/>Exit Code 1];
-
-    K --> E;
-    L --> E;
-
-    E --> M{Exit Code === 0?};
-    M -- Yes --> N[Parse stdout JSON];
-    M -- No --> O[Read stderr];
-
-    N --> P[request.resolve(parsedJson)];
-    O --> Q[request.reject(ProcessExecutionError)];
-
-    subgraph "Finally Block"
-      R[Decrement activeProcessCount];
-      R --> S[Call _processQueue() again];
+    subgraph "r-mcp's Internal Logic"
+        D -- 5. Reads from its hot in-memory cache --> D;
     end
     
-    P --> R;
-    Q --> R;
+    D -- 6. Returns JSON-RPC response --> B;
+    B -- 7. Parses and returns final result --> A;
 ```

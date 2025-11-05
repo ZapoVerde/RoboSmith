@@ -1,17 +1,28 @@
 /**
  * @file packages/client/src/lib/workflow/Orchestrator.transitions.ts
- * @stamp S-20251102-T190000Z-V-FINAL
+ * @stamp S-20251105T165500Z-C-PREAMBLE-UPDATE
  * @architectural-role Orchestrator
  * @description
  * The deterministic, graph-based execution engine for the RoboSmith project. This
  * file contains the core state machine logic for managing transitions between blocks
  * (JUMP, CALL, RETURN). It delegates all context assembly to the
- * `Orchestrator.context.ts` module.
+ * `Orchestrator.context.ts` module and relies on dependency injection for its
+ * core services (AI and Context Partitioner).
  * @core-principles
  * 1. IS a deterministic state machine, not a speculative agent.
  * 2. OWNS the execution loop and runtime state (Payload, Return Stack).
- * 3. DELEGATES all context assembly to the `assembleContext` function.
- * 4. ENFORCES architectural purity via stateless Blocks and explicit control flow.
+ * 3. DELEGATES all context slicing to the injected ContextPartitionerService.
+ *
+ * @api-declaration
+ *   - export class Orchestrator
+ *   -   constructor(manifest: WorkflowManifest, contextService: ContextPartitionerService, apiManager: ApiPoolManager, onStateUpdate: (state: PlanningState) => void)
+ *   -   public async executeNode(startNodeId: string): Promise<void>
+ *
+ * @contract
+ *   assertions:
+ *     purity: mutates          # Owns and mutates internal state: executionPayload, returnStack.
+ *     external_io: https_apis  # Delegates to ApiPoolManager which performs external I/O.
+ *     state_ownership: none    # Does not own global application state.
  */
 
 import { assembleContext } from './Orchestrator.context';
@@ -39,12 +50,18 @@ export class Orchestrator {
   private returnStack: string[] = [];
   private isHalted = false;
 
+  // NEW: Store the injected ContextPartitionerService dependency
+  private contextService: ContextPartitionerService;
+
   constructor(
     private readonly manifest: WorkflowManifest,
-    private readonly contextService: ContextPartitionerService,
+    contextService: ContextPartitionerService, // Receives injected dependency
     private readonly apiManager: ApiPoolManager,
     private readonly onStateUpdate: (state: PlanningState) => void
-  ) {}
+  ) {
+      // Set the injected dependency
+      this.contextService = contextService;
+  }
 
   public async executeNode(startNodeId: string): Promise<void> {
     const startNode = this.manifest[startNodeId];
@@ -60,6 +77,9 @@ export class Orchestrator {
       const { block } = this.findNodeAndBlock(this.currentBlockId);
       logger.debug(`Executing block: ${this.currentBlockId}`);
       this.publishState();
+
+      // In a later task, contextService calls will occur here, before apiManager.execute.
+      // E.g., const contextSlice = await this.contextService.getContext(block.contextSlice, worktreePath);
 
       const context = assembleContext(
         this.manifest,
