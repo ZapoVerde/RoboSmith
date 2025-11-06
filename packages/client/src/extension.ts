@@ -18,6 +18,16 @@
  *     external_io: "vscode"
  *     state_ownership: "none"
  */
+/**
+ * @file packages/client/src/extension.ts
+ * @stamp S-20251106T150000Z-C-COMPOSITION-ROOT-FIX
+ * @architectural-role Feature Entry Point
+ * @description The main activation entry point for the VS Code extension. It is responsible for initializing all singleton services and setting up the application's composition root.
+ * @core-principles
+ * 1. IS the composition root for the entire backend application.
+ * 2. OWNS the initialization and lifecycle of all singleton services.
+ * 3. DELEGATES all ongoing work to other services after initialization.
+ */
 
 import * as vscode from 'vscode';
 import { SecureStorageService } from './lib/ai/SecureStorageService';
@@ -26,48 +36,49 @@ import { createEventHandler, type EventHandlerContext } from './events/handler';
 import { logger } from './lib/logging/logger';
 import type { WorkflowManifest } from './shared/types';
 import { ContextPartitionerService } from './lib/context/ContextPartitionerService';
-// NEW IMPORTS
-import { R_Mcp_ServerManager, type JsonRpcClientFactory } from './lib/context/R_Mcp_ServerManager';
-import type { ProcessStreamProvider, JsonRpcClient } from './lib/context/R_Mcp_ServerManager';
+// --- REFACTOR-RELATED IMPORT CHANGES ---
+import { R_Mcp_ServerManager, type JsonRpcClientFactory, type JsonRpcClient } from './lib/context/R_Mcp_ServerManager';
+import { RealProcessSpawner } from './lib/context/RealProcessSpawner';
+import type { ManagedProcess } from './lib/context/IProcessSpawner';
 
 // TEMPORARY STUB: This must be replaced with the actual RPC library when chosen.
-// For now, it satisfies the dependency on JsonRpcClientFactory.
-const MockJsonRpcClientFactory: JsonRpcClientFactory = (_processStreams: ProcessStreamProvider) => {
-    // In a real implementation, this would establish the JSON-RPC connection.
-    // For now, we return a minimal stub of the client interface.
+const MockJsonRpcClientFactory: JsonRpcClientFactory = (_process: ManagedProcess): JsonRpcClient => {
     return {
         sendCall: (method: string, params: unknown) => {
             logger.debug(`[RPC-STUB] Call: ${method}`, { params });
-            return Promise.resolve({});
+            // In a real scenario, you'd handle responses, e.g., for 'index_code'.
+            return Promise.resolve({ status: 'ok' });
         },
-    } as JsonRpcClient;
+    };
 };
-
 
 export async function activate(context: vscode.ExtensionContext) {
   // --- 1. Initialize Logger (Must be first) ---
   logger.initialize(context.extensionMode);
   logger.info('RoboSmith extension activating...');
 
-  // --- 2. Service Instantiation & Initialization (UPDATED FOR R-MCP ARCHITECTURE) ---
+  // --- 2. Composition Root: Service Instantiation & Dependency Injection ---
+  logger.info('Instantiating services...');
+  
+  // Low-level, concrete adapters are created first.
+  const realProcessSpawner = new RealProcessSpawner();
+
+  // High-level services are now instantiated by injecting their dependencies.
+  // This is the single source of truth for service instances.
   const secureStorageService = new SecureStorageService(context.secrets);
-  const apiPoolManager = ApiPoolManager.getInstance(secureStorageService);
-  
-  // New: Instantiate R_Mcp_ServerManager first, injecting the Mock Factory.
-  const rMcpServerManager = R_Mcp_ServerManager.getInstance(MockJsonRpcClientFactory);
-  
-  // New: Instantiate ContextPartitionerService, injecting the Server Manager.
-  const contextPartitionerService = ContextPartitionerService.getInstance(rMcpServerManager);
+  const apiPoolManager = ApiPoolManager.getInstance(secureStorageService); // This one retains its singleton for now.
+  const rMcpServerManager = new R_Mcp_ServerManager(realProcessSpawner, MockJsonRpcClientFactory);
+  const contextPartitionerService = new ContextPartitionerService(rMcpServerManager);
 
+  // --- 3. Service Initialization ---
   await apiPoolManager.initialize();
-  logger.info('API Pool Manager initialized.');
-  logger.info('Context Partitioner Service architecture assembled.');
+  logger.info('All services instantiated. API Pool Manager initialized.');
 
-
-  // --- 3. Load and Validate Workflow Manifest ---
+  // --- 4. Load and Validate Workflow Manifest ---
   const workspaceFolders = vscode.workspace.workspaceFolders;
   if (!workspaceFolders) {
     logger.error('No workspace folder is open. Cannot find workflow manifest.');
+    vscode.window.showErrorMessage('RoboSmith: No workspace folder open.');
     return;
   }
   const manifestUri = vscode.Uri.joinPath(workspaceFolders[0].uri, '.vision', 'workflows.json');
@@ -75,38 +86,31 @@ export async function activate(context: vscode.ExtensionContext) {
   let manifest: WorkflowManifest;
   try {
     const rawManifest = await vscode.workspace.fs.readFile(manifestUri);
-    const manifestContent = Buffer.from(rawManifest).toString('utf-8');
-    manifest = JSON.parse(manifestContent) as WorkflowManifest;
+    manifest = JSON.parse(Buffer.from(rawManifest).toString('utf-8')) as WorkflowManifest;
     logger.info('Workflow manifest loaded and parsed successfully.');
   } catch (error) {
     logger.error('Failed to read or parse workflow manifest.', { error });
+    vscode.window.showErrorMessage('RoboSmith: Failed to load .vision/workflows.json.');
     return;
   }
 
-  // --- 4. Command Registration ---
+  // --- 5. Command Registration ---
   const disposable = vscode.commands.registerCommand('roboSmith.showPanel', () => {
-    logger.debug('Showing RoboSmith panel.');
     const panel = vscode.window.createWebviewPanel(
-      'roboSmithPanel',
-      'RoboSmith',
-      vscode.ViewColumn.One,
-      { enableScripts: true }
+      'roboSmithPanel', 'RoboSmith', vscode.ViewColumn.One, { enableScripts: true }
     );
 
-    // --- 5. Event Handler Context Injection (UPDATED) ---
     const eventHandlerContext: EventHandlerContext = {
       secureStorageService,
       apiManager: apiPoolManager,
       manifest: manifest,
       panel: panel,
-      // Pass the fully injected Context Partitioner Service
-      contextService: contextPartitionerService,
+      contextService: contextPartitionerService, // Pass the fully constructed service instance.
     };
 
-    // --- 6. Event Handler Registration ---
     const handleEvent = createEventHandler();
     panel.webview.onDidReceiveMessage(
-      (message) => handleEvent(message, eventHandlerContext),
+      (message) => { void handleEvent(message, eventHandlerContext); },
       undefined,
       context.subscriptions
     );
@@ -118,8 +122,7 @@ export async function activate(context: vscode.ExtensionContext) {
   logger.info('RoboSmith extension activated successfully.');
 }
 
-// This function is called when your extension is deactivated
-export function deactivate() {
+export function deactivate(): void {
   logger.info('RoboSmith extension deactivated.');
 }
 

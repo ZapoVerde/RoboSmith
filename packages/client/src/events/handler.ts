@@ -1,24 +1,23 @@
 /**
  * @file packages/client/src/events/handler.ts
- * @stamp S-20251102-T080000Z-C-REFACTORED-TESTABLE
+ * @stamp S-20251106T154021Z-C-COMPLIANT-FIX
  * @architectural-role Orchestrator
- * @description
- * A factory for creating an event handler. This pattern ensures that the state
- * (like the `isWorkflowRunning` flag) is encapsulated within a closure,
- * guaranteeing that each handler instance is isolated and testable.
+ * @description A factory for creating an event handler. It routes commands from
+ * the UI to the appropriate backend services, which are provided via a context object.
  * @core-principles
- * 1. ENFORCES testability by design through state encapsulation.
- * 2. IS the single entry point for all commands from the UI layer.
- * 3. DELEGATES all business logic to the appropriate service or store.
+ * 1. IS the single entry point for all commands from the UI layer.
+ * 2. DELEGATES all business logic to the appropriate service or store.
+ * 3. ENFORCES testability by design through state encapsulation.
  *
  * @api-declaration
+ *   - export interface EventHandlerContext
  *   - export function createEventHandler(): (message: Message, context: EventHandlerContext) => Promise<void>
  *
  * @contract
  *   assertions:
- *     - purity: "mutates"       # The returned function orchestrates state mutations and I/O.
+ *     - purity: "mutates"       # The returned handler function orchestrates state mutations and I/O.
  *     - external_io: "vscode"   # Posts messages back to the VS Code WebView.
- *     - state_ownership: "none" # The factory itself is stateless.
+ *     - state_ownership: "none" # The factory itself is stateless; the returned handler encapsulates its own state.
  */
 
 import type { Message, PlanningState, WorkflowManifest } from '../shared/types';

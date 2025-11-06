@@ -1,17 +1,13 @@
 /**
  * @file packages/client/src/lib/workflow/Orchestrator.transitions.ts
- * @stamp S-20251105T165500Z-C-PREAMBLE-UPDATE
+ * @stamp S-20251106T154021Z-C-PREAMBLE-MERGE
  * @architectural-role Orchestrator
- * @description
- * The deterministic, graph-based execution engine for the RoboSmith project. This
- * file contains the core state machine logic for managing transitions between blocks
- * (JUMP, CALL, RETURN). It delegates all context assembly to the
- * `Orchestrator.context.ts` module and relies on dependency injection for its
- * core services (AI and Context Partitioner).
+ * @description The deterministic, graph-based execution engine. This module contains
+ * the core state machine logic and depends on injected services for all I/O.
  * @core-principles
  * 1. IS a deterministic state machine, not a speculative agent.
  * 2. OWNS the execution loop and runtime state (Payload, Return Stack).
- * 3. DELEGATES all context slicing to the injected ContextPartitionerService.
+ * 3. DELEGATES all AI calls and context slicing to injected services.
  *
  * @api-declaration
  *   - export class Orchestrator

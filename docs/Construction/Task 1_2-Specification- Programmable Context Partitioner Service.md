@@ -5,16 +5,16 @@
 
 ## 1. High-Level Summary
 
-This specification defines the complete Context Partitioning System, a critical component that serves as the integration point for the `roberto-mcp` code analysis engine. The architecture is a two-part system designed to provide maximum performance with optimal resource usage, in line with the **"On-Demand Server-per-Worktree"** model.
+This specification defines the complete Context Partitioning System, the integration point for the `roberto-mcp` code analysis engine. The architecture is a multi-part system designed for maximum performance, resource efficiency, and **testability**, in line with the **"On-Demand Server-per-Worktree"** model and the project's core principle of Dependency Inversion.
 
-*   The **`R_Mcp_ServerManager`** is a stateful, singleton orchestrator responsible for managing the lifecycle of dedicated `roberto-mcp` server processes. It spins up a server only when a workflow becomes active and spins it down when the workflow is paused or complete, leveraging `r-mcp`'s native on-disk caching for near-instant "warm starts".
-*   The **`ContextPartitionerService`** is a simple, stateless façade that acts as a query router. It translates requests from the main `Orchestrator` into JSON-RPC messages and sends them to the correct, running server instance via the `R_Mcp_ServerManager`.
+*   The **`R_Mcp_ServerManager`** is a stateful, singleton orchestrator responsible for managing the lifecycle of dedicated `roberto-mcp` server processes. It achieves this by delegating all direct process creation and I/O to a dedicated **`IProcessSpawner` adapter**. This decouples the complex orchestration logic from the fragile, platform-specific details of process management.
+*   The **`ContextPartitionerService`** remains a simple, stateless façade that acts as a query router. It translates requests from the main `Orchestrator` into JSON-RPC messages and sends them to the correct, running server instance via the `R_Mcp_ServerManager`.
 
-This design makes the complex process of cache management and server lifecycles completely invisible to the end-user and the workflow manifest, fulfilling the project's "Principle of Apparent Simplicity."
+This design makes the complex process of cache management and server lifecycles completely invisible to the end-user while making the core logic fast, reliable, and trivial to test.
 
 ## 2. Core Data Contracts
 
-The system uses JSON-RPC to communicate with the `roberto-mcp` binary. These TypeScript interfaces define the contracts for the most critical tools.
+The system uses JSON-RPC to communicate with the `roberto-mcp` binary. These TypeScript interfaces define the contracts for the most critical tools and are unaffected by the adapter pattern.
 
 ```typescript
 // For the 'get_file_outline' tool
@@ -47,13 +47,20 @@ export interface SymbolReference {
 *   **Core Responsibilities:**
     *   To be the single, authoritative service for managing the lifecycle of all `roberto-mcp` server processes.
     *   To maintain an in-memory map of active server instances, with a strict one-to-one relationship between a running server and an *active* Git worktree.
-    *   To handle the spawning of new server processes and the sending of the initial `index_code` command.
-    *   To handle the graceful termination of server processes to free system resources.
-    *   To provide other services with access to the JSON-RPC clients for running server instances.
+    *   **DELEGATES** the spawning and termination of server processes to the injected `IProcessSpawner` adapter.
+    *   **ORCHESTRATES** the initial `index_code` command via the created process's JSON-RPC client.
+    *   Provides other services with access to the JSON-RPC clients for running server instances.
 *   **Public API (TypeScript Signature):**
     ```typescript
+    import type { IProcessSpawner } from '../architecture/Core_Adapters_and_Dependency_Inversion.md';
+
     export class R_Mcp_ServerManager {
-      public static getInstance(): R_Mcp_ServerManager;
+      /**
+       * The manager's constructor uses Dependency Injection to receive its I/O adapter.
+       */
+      constructor(processSpawner: IProcessSpawner);
+      
+      public static getInstance(processSpawner: IProcessSpawner): R_Mcp_ServerManager;
 
       /**
        * Spawns an r-mcp server for a given worktree. This is a "warm-start-aware"
@@ -73,24 +80,25 @@ export interface SymbolReference {
     }
     ```
 *   **Detailed Behavioral Logic (The Algorithm):**
-    1.  **Internal State:** The service maintains a private `Map<string, ManagedProcess>`, where the key is the `worktreePath` and `ManagedProcess` is an object containing the `child_process` instance and its associated JSON-RPC client.
+    1.  **Internal State:** The service maintains a private `Map<string, ManagedProcess>`, where the key is the `worktreePath` and `ManagedProcess` is an object containing the `IManagedProcess` instance and its associated JSON-RPC client.
     2.  **`spinUpServer(worktreePath)`:**
         a. Checks if a server is already running for the given `worktreePath`. If so, it logs a warning and returns.
-        b. Spawns the `roberto-mcp` binary as a child process, setting the `ROBERTO_MAX_MEMORY_MB` environment variable to a reasonable limit (e.g., 256MB).
-        c. Establishes a JSON-RPC client that communicates over the process's `stdio` streams.
+        b. Calls `this.processSpawner.spawn(binaryPath, worktreePath)` to get an `IManagedProcess` instance.
+        c. Establishes a JSON-RPC client that communicates over the streams provided by the `IManagedProcess` object.
         d. Stores the process and client in its internal map.
-        e. Sends the `tools/call` message for `index_code` with the `worktreePath`. This is an async operation. The method's promise resolves only after `r-mcp` confirms the initial indexing (or fast warm-start validation) is complete.
+        e. Sends the `tools/call` message for `index_code` with the `worktreePath` using the newly created client. The method's promise resolves only after this initial indexing is complete.
     3.  **`spinDownServer(worktreePath)`:**
         a. Looks up the `ManagedProcess` for the given `worktreePath`.
-        b. If found, it sends a graceful shutdown signal to the process and removes it from the map.
+        b. If found, it calls `managedProcess.process.kill()` and removes the entry from the map.
     4.  **`getClientFor(worktreePath)`:**
         a. A synchronous method that performs a simple lookup in the map and returns the stored `JsonRpcClient` or `undefined`.
 
 *   **Mandatory Testing Criteria:**
-    *   A test must verify that `spinUpServer` correctly spawns a child process and sends the `index_code` message via a mocked RPC client.
-    *   A test must verify that `spinDownServer` terminates the correct mocked child process.
-    *   A test must verify that `getClientFor` returns the correct client for a running process and `undefined` for an unknown or stopped one.
-    *   A test must verify that attempting to spin up an already-running server does not create a second process.
+    *   A test must verify that `spinUpServer` correctly calls the `spawn` method on a **mocked `IProcessSpawner`** with the correct binary path and working directory.
+    *   A test must verify that `spinDownServer` calls the `kill` method on the **mocked `IManagedProcess`** instance that was returned by the spawner.
+    *   A test must verify that after `spinUpServer` succeeds, `getClientFor` returns the correct, newly created client.
+    *   A test must verify that attempting to spin up an already-running server does not call the spawner a second time.
+    *   A test must verify that if the `spawn` method on the mocked adapter throws an error, the `spinUpServer` promise is rejected.
 
 ---
 
@@ -105,7 +113,12 @@ export interface SymbolReference {
 *   **Public API (TypeScript Signature):**
     ```typescript
     export class ContextPartitionerService {
-      public static getInstance(): ContextPartitionerService;
+      /**
+       * The service's constructor uses Dependency Injection to receive the manager.
+       */
+      constructor(serverManager: R_Mcp_ServerManager);
+
+      public static getInstance(serverManager: R_Mcp_ServerManager): ContextPartitionerService;
 
       public async getFileOutline(args: GetFileOutlineArgs): Promise<FileOutline>;
       public async getSymbolReferences(args: GetSymbolReferencesArgs): Promise<SymbolReference[]>;
@@ -114,10 +127,10 @@ export interface SymbolReference {
     ```
 
 *   **Detailed Behavioral Logic (The Algorithm):**
-    The service is a stateless singleton that acts as a simple pass-through router.
+    The service's logic is unchanged. It remains a stateless pass-through router.
 
     1.  When a public method like `getFileOutline(args)` is called, it immediately performs the following steps:
-        a. **Get Client:** It calls `R_Mcp_ServerManager.getInstance().getClientFor(args.worktreePath)`.
+        a. **Get Client:** It calls `this.serverManager.getClientFor(args.worktreePath)`.
         b. **Guard Clause:** If the returned client is `undefined`, it immediately rejects the promise with a specific, informative error (e.g., `McpServerError: No active analysis server for this worktree.`).
         c. **Format Request:** It constructs the JSON-RPC message payload for the `get_file_outline` tool, using the `filePath` from its `args`.
         d. **Send Request:** It uses the client to send the request to the appropriate `r-mcp` server process.

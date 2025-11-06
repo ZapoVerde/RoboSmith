@@ -1,30 +1,29 @@
 /**
  * @file packages/client/src/lib/context/ContextPartitionerService.ts
- * @stamp S-20251105T161000Z-C-REWRITTEN-FACADE
+ * @stamp S-20251106T154021Z-C-COMPLIANT-FIX
  * @architectural-role Utility
- * @description
- * A singleton service that acts as a stateless façade for all context *queries*.
- * It routes requests from the Orchestrator to the correct, active R-MCP server
- * client managed by the R_Mcp_ServerManager.
+ * @description A stateless façade for all context queries. It routes requests from
+ * the Orchestrator to the correct R-MCP server instance via the injected
+ * R_Mcp_ServerManager dependency.
  * @core-principles
- * 1. IS the single, authoritative entry point for generating context slices.
- * 2. DELEGATES all process management to the R_Mcp_ServerManager.
- * 3. OWNS the logic for translating high-level requests into JSON-RPC calls.
+ * 1. IS a stateless façade for context queries.
+ * 2. DELEGATES all process awareness to the R_Mcp_ServerManager.
+ * 3. OWNS the logic for translating method calls into JSON-RPC messages.
  *
  * @api-declaration
+ *   - export class McpQueryError extends Error
  *   - export class ContextPartitionerService
- *   -   public static getInstance(serverManager: R_Mcp_ServerManager): ContextPartitionerService
- *   -   public async getFileOutline(args: GetFileOutlineArgs): Promise<FileOutline>
- *   -   public async getSymbolReferences(args: GetSymbolReferencesArgs): Promise<SymbolReference[]>
+ *     - public constructor(serverManager: R_Mcp_ServerManager)
+ *     - public static getInstance(serverManager: R_Mcp_ServerManager): ContextPartitionerService
+ *     - public async getFileOutline(args: GetFileOutlineArgs): Promise<FileOutline>
+ *     - public async getSymbolReferences(args: GetSymbolReferencesArgs): Promise<SymbolReference[]>
  *
  * @contract
  *   assertions:
- *     purity: pure          # This service is stateless and only delegates work.
- *     external_io: none     # Delegates I/O to the JSON-RPC client.
- *     state_ownership: none # This service is stateless.
+ *     - purity: "pure"          # This service is stateless and only delegates work.
+ *     - external_io: "none"     # Delegates I/O to the JSON-RPC client provided by the manager.
+ *     - state_ownership: "none" # This service is stateless.
  */
-
-// Removed all 'child_process', 'os', 'path' imports.
 
 import type {
   FileOutline,
@@ -48,17 +47,17 @@ export class McpQueryError extends Error {
 
 export class ContextPartitionerService {
   private static instance: ContextPartitionerService | undefined;
-  // The service is now injected with its dependency, the stateful orchestrator.
-  private serverManager: R_Mcp_ServerManager;
+  // The service now holds its dependency, which is provided via the constructor.
+  private readonly serverManager: R_Mcp_ServerManager;
 
-  // The constructor is private to enforce the singleton pattern.
-  private constructor(serverManager: R_Mcp_ServerManager) {
+  // The constructor is now public to allow for dependency injection.
+  public constructor(serverManager: R_Mcp_ServerManager) {
     this.serverManager = serverManager;
   }
 
   /**
    * Gets the single, shared instance of the ContextPartitionerService.
-   * NOTE: The argument is mandatory only on the first call to set the instance.
+   * The serverManager dependency MUST be provided on the first call.
    */
   public static getInstance(serverManager: R_Mcp_ServerManager): ContextPartitionerService {
     if (!ContextPartitionerService.instance) {
@@ -83,7 +82,6 @@ export class ContextPartitionerService {
 
     try {
       logger.debug(`Sending R-MCP query: ${toolName}`, { ...(args as unknown as Record<string, unknown>) });
-      // The RPC client's sendCall method is generic and returns an unknown/any type.
       const result = await client.sendCall(toolName, { filePath: args.filePath });
       return result as FileOutline;
     } catch (error) {

@@ -1,220 +1,278 @@
 /**
  * @file packages/client/src/lib/git/GitWorktreeManager.spec.ts
- * @stamp S-20251105T180500Z-V-HOISTING-FINAL-FIX
  * @test-target packages/client/src/lib/git/GitWorktreeManager.ts
- * @description
- * Verifies the complete functionality of the GitWorktreeManager, focusing on the
- * critical self-healing reconciliation loop, state persistence, and the handling
- * of "ghost" and "zombie" worktrees on startup.
- * @criticality
- * CRITICAL (Reason: State Store Ownership, I/O & Concurrency Management).
- * @testing-layer Integration
- *
- * @contract
- *   assertions:
- *     purity: read-only
- *     external_io: none      # All external APIs (fs, globalState) are mocked.
- *     state_ownership: none
+ * @description Verifies the orchestration logic of the GitWorktreeManager in
+ * isolation by providing a mocked GitAdapter. It tests the self-healing
+ * reconciliation loop, state management, and command delegation.
+ * @criticality The test target is CRITICAL.
+ * @testing-layer Unit
  */
 
-
-import { beforeEach, describe, it, expect, vi } from 'vitest';
-import type { Mock, Mocked } from 'vitest';
-
-// --- HOISTING-SAFE MOCKS: Everything inside the factory ---
-vi.mock('vscode', () => {
-  // Define MockFileSystemError INSIDE the factory
-  class MockFileSystemError extends Error {
+// --- HOISTING-SAFE MOCKS ---
+vi.mock('vscode', () => ({
+  workspace: {
+    workspaceFolders: [{ uri: { fsPath: '/mock/workspace' } }],
+  },
+  Uri: {
+    joinPath: vi.fn((base, ...parts) => ({ fsPath: `${base.fsPath}/${parts.join('/')}` })),
+  },
+  FileType: {
+    Directory: 2,
+  },
+  FileSystemError: class MockFileSystemError extends Error {
     code: string;
     constructor(message: string, code: string) {
       super(message);
       this.code = code;
     }
-  }
-  
-  const mockReadDirectory = vi.fn();
-  
-  interface MockUri {
-      fsPath: string;
-      path: string;
-      scheme: string;
-      authority: string;
-      query: string;
-      fragment: string;
-      with: Mock;
-      toJSON: Mock;
-  }
-  
-  const mockUri = {
-    fsPath: '/mock/workspace/root',
-    with: vi.fn(),
-    path: '/mock/workspace/root',
-    scheme: 'file',
-    authority: '',
-    query: '',
-    fragment: '',
-    toJSON: vi.fn(),
-  } as unknown as MockUri;
-  
-  return {
-    workspace: {
-      workspaceFolders: [{ uri: mockUri }],
-      fs: {
-        readDirectory: mockReadDirectory,
-      },
-    },
-    Uri: {
-      joinPath: vi.fn((base: MockUri, ...parts: string[]) => ({
-        fsPath: `${base.fsPath}/${parts.join('/')}`,
-        path: `${base.path}/${parts.join('/')}`,
-        scheme: 'file',
-        authority: '',
-        query: '',
-        fragment: '',
-        with: vi.fn(),
-        toJSON: vi.fn(),
-      })),
-      file: vi.fn(),
-    },
-    FileType: {
-        Directory: 2,
-        File: 1,
-    },
-    FileSystemError: MockFileSystemError,
-  };
-});
-
-vi.mock('../logging/logger', () => ({
-  logger: { info: vi.fn(), debug: vi.fn(), warn: vi.fn(), error: vi.fn() },
+  },
+  default: {},
 }));
 
-// NOW import after mocks are defined
+vi.mock('../logging/logger', () => ({
+  logger: {
+    info: vi.fn(),
+    debug: vi.fn(),
+    warn: vi.fn(),
+    error: vi.fn(),
+  },
+}));
+
+vi.mock('uuid', () => ({
+  v4: vi.fn(() => 'mock-uuid-1234'),
+}));
+
+
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import type { Mocked } from 'vitest';
 import * as vscode from 'vscode';
-import { GitWorktreeManager, type WorktreeSession } from './GitWorktreeManager';
+import { GitWorktreeManager, type WorktreeSession, type CreateWorktreeArgs } from './GitWorktreeManager';
 import { logger } from '../logging/logger';
+import type { GitAdapter } from './IGitAdapter';
 
-// Access the mock directly from the mocked module
-const mockReadDirectory = vscode.workspace.fs.readDirectory as Mock;
 
-describe('GitWorktreeManager - Reconciliation Loop', () => {
-    let manager: GitWorktreeManager;
-    let mockContext: Mocked<vscode.ExtensionContext>;
-    
-    const mockGlobalStateGet = vi.fn();
-    const mockGlobalStateUpdate = vi.fn();
+describe('GitWorktreeManager', () => {
+  let manager: GitWorktreeManager;
+  let mockGitAdapter: Mocked<GitAdapter>;
 
-    const WORKTREES_DIR_URI = '/mock/workspace/root/.worktrees';
-    const MOCK_SESSION_1: WorktreeSession = {
-        sessionId: 'session-a',
-        worktreePath: `${WORKTREES_DIR_URI}/session-a`,
-        branchName: 'a-branch',
-        changePlan: ['a.ts'],
-        status: 'Running',
+  const MOCK_SESSION_A: WorktreeSession = {
+    sessionId: 'session-a',
+    worktreePath: '/mock/workspace/.worktrees/session-a',
+    branchName: 'robo-smith/session-a',
+    changePlan: ['file-a.ts', 'shared.ts'],
+    status: 'Running',
+  };
+
+  const MOCK_SESSION_B: WorktreeSession = {
+    sessionId: 'session-b',
+    worktreePath: '/mock/workspace/.worktrees/session-b',
+    branchName: 'robo-smith/session-b',
+    changePlan: ['file-b.ts'],
+    status: 'Queued',
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+
+    mockGitAdapter = {
+      exec: vi.fn(),
+      readDirectory: vi.fn(),
+      getGlobalState: vi.fn().mockReturnValue(undefined),
+      updateGlobalState: vi.fn(),
     };
-    const MOCK_SESSION_2: WorktreeSession = {
-        sessionId: 'session-b',
-        worktreePath: `${WORKTREES_DIR_URI}/session-b`,
-        branchName: 'b-branch',
-        changePlan: ['b.ts'],
-        status: 'Queued',
-    };
 
+    manager = new GitWorktreeManager(mockGitAdapter);
+  });
+
+  describe('initialize (Reconciliation Loop)', () => {
+    it('should do nothing if state and disk are synchronized ("Happy Path")', async () => {
+      // Arrange
+      mockGitAdapter.getGlobalState.mockReturnValue({
+        [MOCK_SESSION_A.sessionId]: MOCK_SESSION_A,
+        [MOCK_SESSION_B.sessionId]: MOCK_SESSION_B,
+      });
+      mockGitAdapter.readDirectory.mockResolvedValue([
+        ['session-a', vscode.FileType.Directory],
+        ['session-b', vscode.FileType.Directory],
+      ]);
+
+      // Act
+      await manager.initialize();
+
+      // Assert
+      expect(mockGitAdapter.updateGlobalState).not.toHaveBeenCalled();
+      expect(manager._getSessionMap().size).toBe(2);
+      expect(manager._getSessionMap().get('session-a')).toEqual(MOCK_SESSION_A);
+    });
+
+    it('should remove "Ghost" sessions (in state, not on disk)', async () => {
+      // Arrange
+      mockGitAdapter.getGlobalState.mockReturnValue({
+        [MOCK_SESSION_A.sessionId]: MOCK_SESSION_A, // Exists on disk
+        [MOCK_SESSION_B.sessionId]: MOCK_SESSION_B, // Ghost
+      });
+      mockGitAdapter.readDirectory.mockResolvedValue([
+        ['session-a', vscode.FileType.Directory],
+      ]);
+
+      // Act
+      await manager.initialize();
+
+      // Assert
+      expect(logger.warn).toHaveBeenCalledWith(
+        expect.stringContaining('Found "Ghost" worktree in state, removing: session-b')
+      );
+      expect(mockGitAdapter.updateGlobalState).toHaveBeenCalledOnce();
+      const updatedState = mockGitAdapter.updateGlobalState.mock.calls[0][1];
+      expect(updatedState).toEqual({ [MOCK_SESSION_A.sessionId]: MOCK_SESSION_A });
+      expect(manager._getSessionMap().size).toBe(1);
+    });
+
+    it('should ignore "Zombie" directories (on disk, not in state)', async () => {
+      // Arrange
+      mockGitAdapter.getGlobalState.mockReturnValue({
+        [MOCK_SESSION_A.sessionId]: MOCK_SESSION_A,
+      });
+      mockGitAdapter.readDirectory.mockResolvedValue([
+        ['session-a', vscode.FileType.Directory],
+        ['session-zombie', vscode.FileType.Directory], // Zombie
+      ]);
+
+      // Act
+      await manager.initialize();
+
+      // Assert
+      expect(logger.warn).toHaveBeenCalledWith(
+        expect.stringContaining('Found "Zombie" directory on disk. Ignoring: session-zombie')
+      );
+      expect(mockGitAdapter.updateGlobalState).not.toHaveBeenCalled();
+      expect(manager._getSessionMap().size).toBe(1);
+      expect(manager._getSessionMap().has('session-zombie')).toBe(false);
+    });
+
+    it('should gracefully handle unexpected errors during directory read', async () => {
+      // Arrange
+      const unexpectedError = new Error('EIO: I/O error');
+      mockGitAdapter.readDirectory.mockRejectedValue(unexpectedError);
+
+      // Act
+      await manager.initialize();
+
+      // Assert
+      expect(logger.error).toHaveBeenCalledWith(
+        'Critical failure during worktree reconciliation.',
+        { error: unexpectedError }
+      );
+      expect(manager._getSessionMap().size).toBe(0);
+    });
+  });
+
+  describe('createWorktree', () => {
+    it('should execute git command, persist state, and return a new session', async () => {
+      // Arrange
+      const args: CreateWorktreeArgs = {
+        baseBranch: 'main',
+        changePlan: ['src/index.ts'],
+      };
+      const expectedSessionId = 'mock-uuid-1234';
+      const expectedBranchName = `robo-smith/${expectedSessionId.slice(0, 8)}`;
+      const expectedPath = `/mock/workspace/.worktrees/${expectedSessionId}`;
+
+      // Act
+      const result = await manager.createWorktree(args);
+
+      // Assert
+      expect(mockGitAdapter.exec).toHaveBeenCalledWith(
+        ['worktree', 'add', '-b', expectedBranchName, expectedPath, args.baseBranch],
+        { cwd: '/mock/workspace' }
+      );
+      expect(mockGitAdapter.updateGlobalState).toHaveBeenCalledOnce();
+      const persistedState = mockGitAdapter.updateGlobalState.mock.calls[0][1];
+      expect(persistedState).toHaveProperty(expectedSessionId);
+      expect(result.sessionId).toBe(expectedSessionId);
+      expect(result.branchName).toBe(expectedBranchName);
+      expect(result.worktreePath).toBe(expectedPath);
+    });
+
+    it('should not persist state if the git command fails', async () => {
+      // Arrange
+      const gitError = new Error('Git command failed');
+      mockGitAdapter.exec.mockRejectedValue(gitError);
+      const args: CreateWorktreeArgs = { baseBranch: 'main', changePlan: [] };
+
+      // Act & Assert
+      await expect(manager.createWorktree(args)).rejects.toThrow(gitError);
+      expect(manager._getSessionMap().size).toBe(0);
+      expect(mockGitAdapter.updateGlobalState).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('removeWorktree', () => {
+    it('should execute cleanup commands and persist the removal', async () => {
+      // Arrange
+      manager['sessionMap'].set(MOCK_SESSION_A.sessionId, MOCK_SESSION_A);
+
+      // Act
+      await manager.removeWorktree(MOCK_SESSION_A.sessionId);
+
+      // Assert
+      expect(mockGitAdapter.exec).toHaveBeenCalledTimes(2);
+      expect(mockGitAdapter.exec).toHaveBeenCalledWith(
+        ['worktree', 'remove', MOCK_SESSION_A.worktreePath],
+        { cwd: '/mock/workspace' }
+      );
+      expect(mockGitAdapter.exec).toHaveBeenCalledWith(
+        ['branch', '-d', MOCK_SESSION_A.branchName],
+        { cwd: '/mock/workspace' }
+      );
+      expect(mockGitAdapter.updateGlobalState).toHaveBeenCalledWith('activeWorktreeSessions', {});
+      expect(manager._getSessionMap().size).toBe(0);
+    });
+
+    it('should log a warning and do nothing if the session ID is not found', async () => {
+      // Act
+      await manager.removeWorktree('non-existent-id');
+
+      // Assert
+      expect(logger.warn).toHaveBeenCalledWith(
+        'Cannot remove worktree: Session ID "non-existent-id" not found.'
+      );
+      expect(mockGitAdapter.exec).not.toHaveBeenCalled();
+      expect(mockGitAdapter.updateGlobalState).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('runConflictScan', () => {
     beforeEach(() => {
-        vi.clearAllMocks();
-        
-        (GitWorktreeManager as unknown as Record<string, unknown>)['instance'] = undefined;
-        manager = GitWorktreeManager.getInstance();
-
-        mockContext = {
-            globalState: {
-                get: mockGlobalStateGet,
-                update: mockGlobalStateUpdate,
-            },
-        } as unknown as Mocked<vscode.ExtensionContext>;
-
-        mockGlobalStateGet.mockResolvedValue({
-            [MOCK_SESSION_1.sessionId]: MOCK_SESSION_1,
-            [MOCK_SESSION_2.sessionId]: MOCK_SESSION_2,
-        });
-        
-        mockReadDirectory.mockResolvedValue([
-            ['session-a', vscode.FileType.Directory],
-            ['session-b', vscode.FileType.Directory],
-            ['.git', vscode.FileType.Directory],
-        ]);
+      // Setup the manager with existing sessions for conflict scanning
+      manager['sessionMap'].set(MOCK_SESSION_A.sessionId, MOCK_SESSION_A);
+      manager['sessionMap'].set(MOCK_SESSION_B.sessionId, MOCK_SESSION_B);
     });
 
-    it('should initialize with a clean state when cached state and disk match', async () => {
-        await manager.initialize(mockContext);
-        
-        expect(mockGlobalStateUpdate).not.toHaveBeenCalled();
-        expect(manager._getSessionMap().size).toBe(2);
-        expect(manager._getSessionMap().get('session-a')).toEqual(MOCK_SESSION_1);
-    });
-    
-    it('should handle missing .worktrees/ directory by initializing with 0 sessions', async () => {
-        // Create error with code property from the start
-        const fileNotFoundError = Object.assign(
-            new vscode.FileSystemError('Not Found'),
-            { code: 'FileNotFound' }
-        );
-        mockReadDirectory.mockRejectedValue(fileNotFoundError);
-        
-        await manager.initialize(mockContext);
-        
-        expect(manager._getSessionMap().size).toBe(0);
-        expect(logger.info).toHaveBeenCalledWith(expect.stringContaining('Worktrees directory not found'));
+    it('should return CLEAR status when there are no file overlaps', async () => {
+      // Arrange
+      const newChangePlan = ['new-file.ts', 'another-new-file.ts'];
+
+      // Act
+      const result = await manager.runConflictScan(newChangePlan);
+
+      // Assert
+      expect(result.status).toBe('CLEAR');
     });
 
-    it('should remove "Ghost" sessions (In State, Not on Disk) and persist the change', async () => {
-        mockReadDirectory.mockResolvedValue([
-            ['session-a', vscode.FileType.Directory],
-        ]);
-        
-        await manager.initialize(mockContext);
-        
-        expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('Ghost'));
-        expect(manager._getSessionMap().size).toBe(1);
-        expect(manager._getSessionMap().has('session-b')).toBe(false);
-        
-        expect(mockGlobalStateUpdate).toHaveBeenCalledOnce();
-        const updatedState = mockGlobalStateUpdate.mock.calls[0][1];
-        expect(updatedState).toEqual({ [MOCK_SESSION_1.sessionId]: MOCK_SESSION_1 });
+    it('should return CLASH status with correct details on file overlap', async () => {
+      // Arrange
+      const newChangePlan = ['src/component.ts', 'shared.ts']; // Overlaps with MOCK_SESSION_A
+
+      // Act
+      const result = await manager.runConflictScan(newChangePlan);
+
+      // Assert
+      expect(result.status).toBe('CLASH');
+      if (result.status === 'CLASH') {
+        expect(result.conflictingSessionId).toBe(MOCK_SESSION_A.sessionId);
+        expect(result.conflictingFiles).toEqual(['shared.ts']);
+      }
     });
-    
-    it('should ignore "Zombie" directories (On Disk, Not in State) and log a warning', async () => {
-        mockGlobalStateGet.mockResolvedValue({
-            [MOCK_SESSION_1.sessionId]: MOCK_SESSION_1,
-        });
-        
-        await manager.initialize(mockContext);
-        
-        // FIX: Logger is called with a single string, not two args
-        expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('Zombie'));
-        expect(manager._getSessionMap().size).toBe(1);
-        expect(manager._getSessionMap().has('session-b')).toBe(false);
-        expect(mockGlobalStateUpdate).not.toHaveBeenCalled();
-    });
-
-    it('should correctly handle the general case when both Ghost and Zombie exist', async () => {
-        mockGlobalStateGet.mockResolvedValue({
-            [MOCK_SESSION_1.sessionId]: MOCK_SESSION_1,
-            [MOCK_SESSION_2.sessionId]: MOCK_SESSION_2,
-        });
-
-        const MOCK_ZOMBIE_ID = 'session-c';
-        mockReadDirectory.mockResolvedValue([
-            ['session-a', vscode.FileType.Directory],
-            [MOCK_ZOMBIE_ID, vscode.FileType.Directory],
-        ]);
-
-        await manager.initialize(mockContext);
-
-        expect(logger.warn).toHaveBeenCalledTimes(2);
-        expect(manager._getSessionMap().size).toBe(1);
-        expect(manager._getSessionMap().has('session-a')).toBe(true);
-        expect(manager._getSessionMap().has('session-b')).toBe(false);
-        expect(manager._getSessionMap().has('session-c')).toBe(false);
-        expect(mockGlobalStateUpdate).toHaveBeenCalledOnce();
-    });
+  });
 });

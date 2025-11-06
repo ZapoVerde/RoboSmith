@@ -1,10 +1,9 @@
 /**
- * @file packages/client/src/lib/workflow/Orchestrator.spec.ts
- * @stamp S-20251102-T124500Z-V-COMPLETE
- * @test-target packages/client/src/lib/workflow/Orchestrator.ts
- * @description
- * Final test suite for the Orchestrator engine's core functionality.
- * @criticality CRITICAL
+ * @file packages/client/src/lib/workflow/Orchestrator.transitions.spec.ts
+ * @test-target packages/client/src/lib/workflow/Orchestrator.transitions.ts
+ * @description Verifies the core state transition logic of the Orchestrator by
+ * providing mocked service dependencies (ApiPoolManager, ContextPartitionerService).
+ * @criticality The test target is CRITICAL.
  * @testing-layer Integration
  */
 
@@ -68,6 +67,7 @@ const MOCK_MANIFEST: WorkflowManifest = {
 
 describe('Orchestrator', () => {
   let mockApiManager: ApiPoolManager;
+  // Mock for the injected ContextPartitionerService dependency
   const mockContextService = {} as ContextPartitionerService;
   const mockOnStateUpdate = vi.fn();
 
@@ -83,6 +83,7 @@ describe('Orchestrator', () => {
   });
 
   it('should throw an error if the initial nodeId is not found', async () => {
+    // Instantiate with all required mock dependencies
     const orchestrator = new Orchestrator(MOCK_MANIFEST, mockContextService, mockApiManager, mockOnStateUpdate);
     await expect(orchestrator.executeNode('Node:DoesNotExist')).rejects.toThrow();
   });
@@ -98,20 +99,18 @@ describe('Orchestrator', () => {
     await orchestrator.executeNode('Node:MultiStep');
     const debugCalls = vi.mocked(logger.debug).mock.calls;
     expect(debugCalls[0][0]).toBe('Executing block: Node:MultiStep__Block:Start');
-    // Assert that the second log is the jump instruction, and the third is the final execution.
     expect(debugCalls[1][0]).toBe('Jumping to block: Node:MultiStep__Block:End');
     expect(debugCalls[2][0]).toBe('Executing block: Node:MultiStep__Block:End');
   });
 
-  // This test is now enabled and will pass.
   it('should call the correct worker via the ApiPoolManager', async () => {
     const orchestrator = new Orchestrator(MOCK_MANIFEST, mockContextService, mockApiManager, mockOnStateUpdate);
     await orchestrator.executeNode('Node:SingleStep');
 
-    // Assert that the manager was called with the correct work order.
+    // Assert that the mock ApiPoolManager was called correctly
     expect(mockApiManager.execute).toHaveBeenCalledWith({
-      worker: 'Worker:Test', // Correct property name
-      context: [],           // Initial payload is empty
+      worker: 'Worker:Test',
+      context: [],
     });
   });
 });

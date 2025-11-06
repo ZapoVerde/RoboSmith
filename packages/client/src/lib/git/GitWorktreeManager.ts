@@ -1,92 +1,96 @@
 /**
  * @file packages/client/src/lib/git/GitWorktreeManager.ts
- * @stamp S-20251105T171000Z-C-ESLINT-FIX
+ * @stamp S-20251105T195212Z-C-ARCH-COMPLIANT
  * @architectural-role Orchestrator
  * @description
- * The authoritative service for managing the lifecycle, state persistence, and
- * conflict detection of all user-initiated Git worktrees. It implements the
- * self-healing reconciliation loop on startup.
+ * The authoritative service for orchestrating the lifecycle, state, and
+ * conflict detection of all Git worktrees. It is a pure orchestrator that
+ * depends on an injected GitAdapter to perform all I/O.
  * @core-principles
- * 1. OWNS the management and state persistence for all Git worktrees.
- * 2. ENFORCES safety and parallelism via the reconciliation loop.
- * 3. ABSTRACTS all raw 'git' command-line execution into a robust API.
+ * 1. OWNS the stateful logic for the worktree reconciliation loop.
+ * 2. DELEGATES all Git commands, file system reads, and state persistence to the adapter.
+ * 3. MUST be fully testable in isolation with a mock adapter.
  *
  * @api-declaration
  *   - export class GitWorktreeManager
- *   -   public static getInstance(): GitWorktreeManager
- *   -   public async initialize(context: vscode.ExtensionContext): Promise<void>
+ *   -   public constructor(gitAdapter: GitAdapter)
+ *   -   public async initialize(): Promise<void>
  *   -   public async createWorktree(args: CreateWorktreeArgs): Promise<WorktreeSession>
  *   -   public async removeWorktree(sessionId: string): Promise<void>
  *   -   public async runConflictScan(newChangePlan: string[]): Promise<ConflictScanResult>
  *
  * @contract
  *   assertions:
- *     purity: mutates          # Mutates internal state and VS Code globalState.
- *     external_io: none        # Delegates to Git CLI and FS API (external to the service's logic).
- *     state_ownership: ['sessionMap'] # Owns the in-memory map of active sessions.
+ *     purity: mutates
+ *     external_io: none
+ *     state_ownership: ['sessionMap']
  */
 
 import * as vscode from 'vscode';
+import { v4 as uuidv4 } from 'uuid';
 import { logger } from '../logging/logger';
+import type { GitAdapter } from './IGitAdapter';
 
-// --- Data Contracts (Defined locally for now, to be moved to shared/types later) ---
+// --- Data Contracts ---
 
 /**
  * @id packages/client/src/lib/git/GitWorktreeManager.ts#WorktreeSession
- * @description Represents a single, managed Git worktree session.
+ * @description Represents a single, managed Git worktree session, including its state and planned changes.
  */
 export interface WorktreeSession {
+  /** A unique identifier for the session (and its tab), matching the worktree's directory name. */
   sessionId: string;
+  /** The absolute path to the root of the worktree's directory. */
   worktreePath: string;
+  /** The name of the dedicated Git branch checked out in this worktree. */
   branchName: string;
+  /** The list of "seed files" that this session's workflow intends to modify. */
   changePlan: string[];
+  /** The current operational status of the workflow (e.g., Running, Queued, Held). */
   status: 'Running' | 'Queued' | 'Held';
 }
 
 /**
  * @id packages/client/src/lib/git/GitWorktreeManager.ts#CreateWorktreeArgs
- * @description Defines the arguments needed to create a new worktree.
+ * @description Defines the set of arguments required to create a new, isolated worktree session.
  */
 export interface CreateWorktreeArgs {
+  /** The initial list of "seed files" the new workflow intends to modify. */
   changePlan: string[];
+  /** The name of the Git branch to use as the starting point for the new worktree. */
   baseBranch: string;
 }
 
 /**
  * @id packages/client/src/lib/git/GitWorktreeManager.ts#ConflictScanResult
- * @description Represents the outcome of a conflict scan.
+ * @description A discriminated union representing the outcome of a conflict scan between a new change plan and existing sessions.
  */
 export type ConflictScanResult =
   | { status: 'CLEAR' }
-  | { status: 'CLASH'; conflictingSessionId: string; conflictingFiles: string[] };
+  | {
+      status: 'CLASH';
+      conflictingSessionId: string;
+      conflictingFiles: string[];
+    };
 
 // --- Service Implementation ---
 
 export class GitWorktreeManager {
-  private static instance: GitWorktreeManager | undefined;
-  // State ownership: The in-memory map of active sessions.
   private sessionMap: Map<string, WorktreeSession> = new Map();
-  // Persistence Context: Required for the `_persistState` method.
-  private persistenceContext: vscode.ExtensionContext | null = null;
   private readonly GLOBAL_STATE_KEY = 'activeWorktreeSessions';
   private readonly WORKTREES_DIR = '.worktrees';
 
-  public constructor() {}
-
-  public static getInstance(): GitWorktreeManager {
-    if (!GitWorktreeManager.instance) {
-      GitWorktreeManager.instance = new GitWorktreeManager();
-    }
-    return GitWorktreeManager.instance;
-  }
+  /**
+   * The manager's constructor uses Dependency Injection to receive its I/O adapter.
+   * An instance of this class cannot be created without providing its dependency.
+   */
+  public constructor(private readonly gitAdapter: GitAdapter) {}
 
   /**
-   * CRITICAL V1 METHOD: Initializes the service, runs the self-healing
-   * reconciliation loop, and loads the persisted state from globalState.
-   * @param context The VS Code ExtensionContext, required for state persistence.
+   * Initializes the service by running the self-healing reconciliation loop.
+   * MUST be called once on extension activation.
    */
-  public async initialize(context: vscode.ExtensionContext): Promise<void> {
-    this.persistenceContext = context;
+  public async initialize(): Promise<void> {
     logger.info('Starting GitWorktreeManager reconciliation loop...');
 
     const workspaceFolders = vscode.workspace.workspaceFolders;
@@ -98,99 +102,119 @@ export class GitWorktreeManager {
     const worktreesUri = vscode.Uri.joinPath(workspaceRootUri, this.WORKTREES_DIR);
 
     try {
-      // 1. Read Cached State (Extension's Memory)
-      const cachedState = (await context.globalState.get(this.GLOBAL_STATE_KEY)) as
-        | Record<string, WorktreeSession>
-        | undefined;
+      const cachedState = this.gitAdapter.getGlobalState<Record<string, WorktreeSession>>(
+        this.GLOBAL_STATE_KEY
+      );
       const cachedSessions = cachedState || {};
       let stateChanged = false;
 
-      // 2. Read Ground Truth (The File System)
-      // ReadDirectory returns an array of [name, type] tuples.
-      const onDiskEntries = await vscode.workspace.fs.readDirectory(worktreesUri);
+      const onDiskEntries = await this.gitAdapter.readDirectory(worktreesUri);
       const onDiskSessionIds = new Set(
         onDiskEntries.filter(([, type]) => type === vscode.FileType.Directory).map(([name]) => name)
       );
 
-      // 3. Find and Handle "Ghosts" (In State, Not on Disk)
       for (const [sessionId, session] of Object.entries(cachedSessions)) {
         if (!onDiskSessionIds.has(sessionId)) {
           logger.warn(`Found "Ghost" worktree in state, removing: ${sessionId}.`);
           delete cachedSessions[sessionId];
           stateChanged = true;
         } else {
-          // If it exists on disk, add it to the in-memory map.
           this.sessionMap.set(sessionId, session);
         }
       }
 
-      // 4. Find and Handle "Zombies" (On Disk, Not in State)
       for (const sessionId of onDiskSessionIds) {
         if (!this.sessionMap.has(sessionId)) {
           logger.warn(`Found "Zombie" directory on disk. Ignoring: ${sessionId}.`);
-          // Note: V1 only logs the warning. A future cleanup command will address this.
         }
       }
 
-      // 5. Persist and Finalize
       if (stateChanged) {
         await this._persistState();
       }
 
       logger.info(`Reconciliation complete. Loaded ${this.sessionMap.size} active sessions.`);
     } catch (e) {
-      // Handle case where .worktrees/ directory doesn't exist on first run
       if (e instanceof vscode.FileSystemError && e.code === 'FileNotFound') {
         logger.info(`Worktrees directory not found. Initializing with 0 sessions.`);
       } else {
         logger.error('Critical failure during worktree reconciliation.', { error: e });
-        // The service will start with an empty map to prevent further crashes.
         this.sessionMap = new Map();
       }
     }
   }
 
-  // --- Core API Stubs (Logic implemented in later tasks) ---
-
   public async createWorktree(args: CreateWorktreeArgs): Promise<WorktreeSession> {
-    logger.debug('STUB: Executing git worktree add command...');
-    // Simulated worktree creation
+    const workspaceFolders = vscode.workspace.workspaceFolders;
+    if (!workspaceFolders) throw new Error('Cannot create worktree: No workspace folder open.');
+    const workspaceRoot = workspaceFolders[0].uri.fsPath;
+
+    const sessionId = uuidv4();
+    const branchName = `robo-smith/${sessionId.slice(0, 8)}`;
+    const worktreePath = vscode.Uri.joinPath(
+      workspaceFolders[0].uri,
+      this.WORKTREES_DIR,
+      sessionId
+    ).fsPath;
+
+    // Delegate all Git commands to the adapter
+    await this.gitAdapter.exec(['worktree', 'add', '-b', branchName, worktreePath, args.baseBranch], {
+      cwd: workspaceRoot,
+    });
+
     const newSession: WorktreeSession = {
-      sessionId: `session-${Math.random().toString(36).slice(2, 9)}`,
-      worktreePath: `/mock/path/to/worktree`,
-      branchName: args.baseBranch,
+      sessionId,
+      worktreePath,
+      branchName,
       changePlan: args.changePlan,
       status: 'Running',
     };
+
     this.sessionMap.set(newSession.sessionId, newSession);
     await this._persistState();
+    logger.info(`Successfully created worktree: ${sessionId}`);
     return newSession;
   }
 
   public async removeWorktree(sessionId: string): Promise<void> {
-    logger.debug(`STUB: Executing git worktree remove for ${sessionId}`);
+    const session = this.sessionMap.get(sessionId);
+    if (!session) {
+      logger.warn(`Cannot remove worktree: Session ID "${sessionId}" not found.`);
+      return;
+    }
+    const workspaceFolders = vscode.workspace.workspaceFolders;
+    if (!workspaceFolders) throw new Error('Cannot remove worktree: No workspace folder open.');
+    const workspaceRoot = workspaceFolders[0].uri.fsPath;
+
+    // Delegate all Git commands to the adapter
+    await this.gitAdapter.exec(['worktree', 'remove', session.worktreePath], { cwd: workspaceRoot });
+    await this.gitAdapter.exec(['branch', '-d', session.branchName], { cwd: workspaceRoot });
+
     this.sessionMap.delete(sessionId);
     await this._persistState();
+    logger.info(`Successfully removed worktree: ${sessionId}`);
   }
 
-  public async runConflictScan(_newChangePlan: string[]): Promise<ConflictScanResult> { // FIX: Underscore prefix
-    logger.debug('STUB: Running conflict scan...');
-    // The actual scan logic will run against this.sessionMap
+  public async runConflictScan(newChangePlan: string[]): Promise<ConflictScanResult> {
+    for (const session of this.sessionMap.values()) {
+      const conflictingFiles = session.changePlan.filter((file) => newChangePlan.includes(file));
+      if (conflictingFiles.length > 0) {
+        return {
+          status: 'CLASH',
+          conflictingSessionId: session.sessionId,
+          conflictingFiles,
+        };
+      }
+    }
     return { status: 'CLEAR' };
   }
 
-  // --- Private Persistence Utility ---
-
   private async _persistState(): Promise<void> {
-    if (!this.persistenceContext) {
-      logger.warn('Cannot persist state: Context not initialized.');
-      return;
-    }
     const stateRecord = Object.fromEntries(this.sessionMap);
-    await this.persistenceContext.globalState.update(this.GLOBAL_STATE_KEY, stateRecord);
+    // Delegate state persistence to the adapter
+    await this.gitAdapter.updateGlobalState(this.GLOBAL_STATE_KEY, stateRecord);
   }
 
-  // Exposed for testing purposes
   public _getSessionMap(): ReadonlyMap<string, WorktreeSession> {
     return this.sessionMap;
   }

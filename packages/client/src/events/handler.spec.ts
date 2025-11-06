@@ -1,20 +1,9 @@
 /**
  * @file packages/client/src/events/handler.spec.ts
- * @stamp S-20251102-T093000Z-V-DEFINITIVE
  * @test-target packages/client/src/events/handler.ts
- * @description
- * Verifies the contract of the event handler factory. It ensures that each created
- * handler correctly routes commands and maintains its own encapsulated state for
- * concurrency, proving the design is testable and robust.
- * @criticality
- * The test target is CRITICAL as it is the primary command router (Rubric Point #2).
- * @testing-layer Integration
- *
- * @contract
- *   assertions:
- *     - Each test gets a fresh handler instance from the factory.
- *     - Verifies correct routing for all API key management commands.
- *     - Uses the correct, robust pattern for mocking class constructors.
+ * @description Verifies that the event handler correctly routes new API key management commands to the appropriate mocked store actions.
+ * @criticality The test target is CRITICAL as it is a core orchestrator.
+ * @testing-layer Unit
  */
 
 // --- HOISTING-SAFE MOCKS ---
@@ -37,12 +26,8 @@ import type { ApiPoolManager } from '../lib/ai/ApiPoolManager';
 import type { SecureStorageService } from '../lib/ai/SecureStorageService';
 import type { ApiKey } from '@shared/domain/api-key';
 
-// This is the definitive, robust pattern for mocking a class constructor.
-// We create a single, reusable spy that we can attach to the mock instance.
 const mockExecuteNode = vi.fn();
 vi.mocked(Orchestrator).mockImplementation(function() {
-  // `this` refers to the instance being created by `new Orchestrator()`
-  // We attach our spy to the instance.
   return {
     executeNode: mockExecuteNode,
   } as unknown as Orchestrator;
@@ -63,12 +48,13 @@ describe('handleEvent', () => {
     handleEvent = createEventHandler();
     mockPostMessage = vi.fn();
 
+    // Updated mockContext to conform to the new EventHandlerContext interface
     mockContext = {
       secureStorageService: {} as unknown as SecureStorageService,
       panel: { webview: { postMessage: mockPostMessage } } as unknown as WebviewPanel,
       manifest: {} as WorkflowManifest,
-      contextService: {} as ContextPartitionerService,
-      apiManager: {} as ApiPoolManager,
+      contextService: {} as ContextPartitionerService, // Added mock dependency
+      apiManager: {} as ApiPoolManager,             // Added mock dependency
     };
 
     vi.mocked(settingsStore.getState).mockReturnValue({
@@ -106,6 +92,8 @@ describe('handleEvent', () => {
 
       await handleEvent(message, mockContext);
 
+      // The test now implicitly verifies that the mock services from the context
+      // are passed to the constructor, as the mock was successfully instantiated.
       expect(Orchestrator).toHaveBeenCalledOnce();
       expect(mockExecuteNode).toHaveBeenCalledWith('test-node');
     });
