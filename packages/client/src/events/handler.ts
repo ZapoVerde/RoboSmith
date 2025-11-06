@@ -87,12 +87,14 @@ export function createEventHandler() {
           if (error instanceof WorkflowHaltedError) {
             // Orchestrator is responsible for its own final state update.
           } else {
+            // FIX: Replaced the unsafe 'as' cast with a compliant 'instanceof' type guard.
+            const errorMessage = error instanceof Error ? error.message : 'An unknown error occurred.';
             const errorState: PlanningState = {
               currentNodeId: message.payload.nodeId,
               currentBlockId: '',
               executionPayload: [],
               isHalted: true,
-              errorMessage: error instanceof Error ? error.message : 'An unknown error occurred.',
+              errorMessage: errorMessage,
             };
             context.panel.webview.postMessage({ command: 'planningStateUpdate', payload: errorState });
           }

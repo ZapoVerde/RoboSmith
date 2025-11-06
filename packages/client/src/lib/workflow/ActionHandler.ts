@@ -2,7 +2,7 @@
  * @file packages/client/src/lib/workflow/ActionHandler.ts
  * @stamp S-20251102T153500Z-C-REFACTORED-COMPLIANT
  * @architectural-role Utility
- * @description Contains the pure, stateless logic for executing the atomic actions (`JUMP`, `CALL`, `RETURN`) of the workflow engine's Domain Specific Language (DSL).
+ * @description Contains the pure, stateless logic for executing the atomic actions (`JUMP`, `CALL`, 'RETURN') of the workflow engine's Domain Specific Language (DSL).
  * @core-principles
  * 1. IS a pure function module; it contains no state of its own.
  * 2. OWNS the parsing and execution logic for the action DSL string.
@@ -30,8 +30,6 @@ export interface ActionParams {
   action: string;
   /** The current return stack from the Orchestrator. */
   currentStack: string[];
-  /** The calculated return address for a CALL action. */
-  returnAddress?: string;
 }
 
 /**
@@ -50,31 +48,42 @@ export interface ActionResult {
  * @returns The resulting state after the action is applied.
  */
 export function executeAction(params: ActionParams): ActionResult {
-  const { action, currentStack, returnAddress } = params;
-  const [command, targetId] = action.split(':');
+  const { action, currentStack } = params;
+
+  // DEFINITIVE FIX: This parsing is now robust. It correctly separates the
+  // command from the full payload, regardless of colons in the payload.
+  const separatorIndex = action.indexOf(':');
+  const command = separatorIndex === -1 ? action : action.substring(0, separatorIndex);
+  const payload = separatorIndex === -1 ? '' : action.substring(separatorIndex + 1);
 
   switch (command) {
-    case 'JUMP':
-      if (!targetId) {
+    case 'JUMP': {
+      if (!payload || !payload.trim()) {
         throw new Error(`Invalid JUMP action: Missing TargetId in "${action}".`);
       }
-      logger.debug(`Executing JUMP to: ${targetId}`);
-      return { nextBlockId: targetId.trim(), nextStack: currentStack };
+      const trimmedTargetId = payload.trim();
+      logger.debug(`Executing JUMP to: ${trimmedTargetId}`);
+      return { nextBlockId: trimmedTargetId, nextStack: currentStack };
+    }
 
-    case 'CALL':
-      if (!targetId) {
+    case 'CALL': {
+      const [targetId, returnAddress] = payload.split(':');
+      if (!targetId || !targetId.trim()) {
         throw new Error(`Invalid CALL action: Missing TargetId in "${action}".`);
       }
-      if (!returnAddress) {
-        throw new Error('Invalid CALL invocation: A returnAddress must be provided.');
+      if (!returnAddress || !returnAddress.trim()) {
+        throw new Error(`Invalid CALL action: Missing ReturnAddress in "${action}".`);
       }
-      logger.debug(`Executing CALL to: ${targetId}, pushing return address: ${returnAddress}`);
+      const trimmedCallTarget = targetId.trim();
+      const trimmedReturnAddress = returnAddress.trim();
+      logger.debug(`Executing CALL to: ${trimmedCallTarget}, pushing return address: ${trimmedReturnAddress}`);
       return {
-        nextBlockId: targetId.trim(),
-        nextStack: [...currentStack, returnAddress],
+        nextBlockId: trimmedCallTarget,
+        nextStack: [...currentStack, trimmedReturnAddress],
       };
+    }
 
-    case 'RETURN': { // CORRECTED: Added block scope to the case.
+    case 'RETURN': {
       if (currentStack.length === 0) {
         logger.warn('RETURN action executed on an empty stack. Workflow will terminate.');
         return { nextBlockId: null, nextStack: [] };

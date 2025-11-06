@@ -15,7 +15,7 @@ vi.mock('../features/settings/state/SettingsStore');
 vi.mock('../lib/workflow/Orchestrator.transitions');
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import type { Mock, } from 'vitest';
+import type { Mock } from 'vitest';
 import { createEventHandler, type EventHandlerContext } from './handler';
 import { settingsStore } from '../features/settings/state/SettingsStore';
 import { Orchestrator, WorkflowHaltedError } from '../lib/workflow/Orchestrator.transitions';
@@ -27,12 +27,11 @@ import type { SecureStorageService } from '../lib/ai/SecureStorageService';
 import type { ApiKey } from '@shared/domain/api-key';
 
 const mockExecuteNode = vi.fn();
-vi.mocked(Orchestrator).mockImplementation(function() {
+vi.mocked(Orchestrator).mockImplementation(function () {
   return {
     executeNode: mockExecuteNode,
   } as unknown as Orchestrator;
 });
-
 
 describe('handleEvent', () => {
   let mockContext: EventHandlerContext;
@@ -54,7 +53,7 @@ describe('handleEvent', () => {
       panel: { webview: { postMessage: mockPostMessage } } as unknown as WebviewPanel,
       manifest: {} as WorkflowManifest,
       contextService: {} as ContextPartitionerService, // Added mock dependency
-      apiManager: {} as ApiPoolManager,             // Added mock dependency
+      apiManager: {} as ApiPoolManager, // Added mock dependency
     };
 
     vi.mocked(settingsStore.getState).mockReturnValue({
@@ -100,13 +99,13 @@ describe('handleEvent', () => {
 
     it('should not start a new workflow if one is already running', async () => {
       const message: Message = { command: 'startWorkflow', payload: { nodeId: 'test-node' } };
-      
+
       let resolveFirstCall: ((value: unknown) => void) | undefined;
       const firstCallPromise = new Promise((resolve) => {
         resolveFirstCall = resolve;
       });
       mockExecuteNode.mockReturnValue(firstCallPromise);
-      
+
       const firstPromise = handleEvent(message, mockContext);
       const secondPromise = handleEvent(message, mockContext);
 

@@ -23,7 +23,7 @@
  *     - Verifies correct round-robin key rotation.
  */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach,  } from 'vitest';
 import type { Mocked } from 'vitest';
 import { ApiPoolManager, AllApiKeysFailedError, type WorkOrder } from './ApiPoolManager';
 import { SecureStorageService } from './SecureStorageService';
@@ -68,6 +68,7 @@ describe('ApiPoolManager', () => {
     it('should load and sort keys from storage during initialize', async () => {
       mockStorageService.getAllApiKeys.mockResolvedValue(mockApiKeys);
       await manager.initialize();
+      // Use string access to safely inspect the private property for testing.
       const internalKeys = manager['apiKeys'];
       expect(internalKeys.length).toBe(4);
       expect(internalKeys[0].id).toBe('key1-openai');
@@ -91,25 +92,32 @@ describe('ApiPoolManager', () => {
     });
 
     it('should failover to the next key if the first one has a retryable error', async () => {
-      const failingKey: ApiKey = { id: 'a-failing', secret: 'fail-rate-limit', provider: 'openai' };
-      const succeedingKey: ApiKey = { id: 'b-succeeding', secret: 'good', provider: 'openai' };
-      mockStorageService.getAllApiKeys.mockResolvedValue({ [succeedingKey.id]: succeedingKey, [failingKey.id]: failingKey });
-      await manager.initialize();
+      // key2 is mocked to produce a retryable "rate limit" error. key1 will succeed.
+      mockStorageService.getAllApiKeys.mockResolvedValue({ key1: mockApiKeys['key1'], key2: mockApiKeys['key2'] });
+      await manager.initialize(); // The manager will try key1, then key2. Let's reverse for the test.
+      manager['nextKeyIndex'] = 1; // Start with the failing key (key2).
 
       const result = await manager.execute(sampleWorkOrder);
+
       expect(result.signal).toBe('SIGNAL:SUCCESS');
       expect(logger.warn).toHaveBeenCalledOnce();
+      // Verify it failed over and the next key to be used is the one after the successful key (key1).
+      expect(manager['nextKeyIndex']).toBe(1);
     });
 
     it('should fail immediately if a non-retryable error occurs', async () => {
-      mockStorageService.getAllApiKeys.mockResolvedValue({ key4: mockApiKeys['key4'] });
+      // key4 is mocked to produce a non-retryable "server" error.
+      mockStorageService.getAllApiKeys.mockResolvedValue({ key1: mockApiKeys['key1'], key4: mockApiKeys['key4'] });
       await manager.initialize();
+      manager['nextKeyIndex'] = 1; // Start with the non-retryable failing key (key4).
 
       await expect(manager.execute(sampleWorkOrder)).rejects.toThrow('MOCK ERROR: 500 Internal Server Error');
+      // It should not have tried the other key.
       expect(logger.warn).not.toHaveBeenCalled();
     });
 
     it('should throw an AllApiKeysFailedError if all keys fail with retryable errors', async () => {
+      // key2 and key3 are both mocked to produce retryable errors.
       mockStorageService.getAllApiKeys.mockResolvedValue({ key2: mockApiKeys['key2'], key3: mockApiKeys['key3'] });
       await manager.initialize();
 
@@ -118,16 +126,22 @@ describe('ApiPoolManager', () => {
     });
 
     it('should correctly rotate through the keys in a round-robin fashion', async () => {
-      mockStorageService.getAllApiKeys.mockResolvedValue({ key1: mockApiKeys['key1'], key2: mockApiKeys['key2'] });
-      await manager.initialize(); // Order is key1, key2
+      // Both keys are valid and will succeed.
+      const keyA: ApiKey = { id: 'keyA', provider: 'openai', secret: 'sk-a' };
+      const keyB: ApiKey = { id: 'keyB', provider: 'openai', secret: 'sk-b' };
+      mockStorageService.getAllApiKeys.mockResolvedValue({ [keyA.id]: keyA, [keyB.id]: keyB });
+      await manager.initialize(); // Order is keyA, keyB
 
-      // First call uses key1 (succeeds). Index for next call becomes 1.
+      // First call uses keyA. Index for next call becomes 1.
       await manager.execute(sampleWorkOrder);
       expect(manager['nextKeyIndex']).toBe(1);
 
-      // Second call uses key2 (fails). Wraps around and uses key1 (succeeds). Index for next call becomes 1.
+      // Second call uses keyB. Index for next call becomes 0 (wraps around).
       await manager.execute(sampleWorkOrder);
-      expect(logger.warn).toHaveBeenCalledOnce();
+      expect(manager['nextKeyIndex']).toBe(0);
+
+      // Third call uses keyA again.
+      await manager.execute(sampleWorkOrder);
       expect(manager['nextKeyIndex']).toBe(1);
     });
   });

@@ -15,7 +15,7 @@ This cheatsheet provides a quick reference for managing your pnpm scripts based 
 
 ### Development
 
-The following scripts are used for the "CONTEXT SLICER" feature of your project.
+The following scripts are used for the "CONTEXT SLICER" feature of your project. 
 
 | Command | Description |
 |---|---|

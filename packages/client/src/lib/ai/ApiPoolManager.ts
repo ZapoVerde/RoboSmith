@@ -1,16 +1,12 @@
 /**
  * @file packages/client/src/lib/ai/ApiPoolManager.ts
  * @stamp S-20251102-T140000Z-C-FINAL-WITH-PREAMBLE
- * @architectural-role Service
- * @description
- * A singleton service that manages a pool of API keys. It is responsible for
- * orchestrating outgoing AI API calls using a resilient, failover-driven
- * round-robin strategy, providing a unified `execute` interface for the Orchestrator.
+ * @architectural-role Orchestrator
+ * @description Implements the core stateful orchestrator for the AI Service Layer. It manages the pool of `ApiKey`s, executes the "key carousel" logic, and handles failover.
  * @core-principles
- * 1. IS the single source of truth for managing and dispatching AI work.
- * 2. OWNS the stateful round-robin and failover logic for all AI requests.
- * 3. MUST abstract key-specific API failures from its consumers.
- * 4. DELEGATES all secure key persistence to the injected SecureStorageService.
+ * 1. IS the single, stateful entry point for all AI requests from the application.
+ * 2. OWNS the key pool, the round-robin state, and the failover logic.
+ * 3. DELEGATES all actual network I/O to the stateless `aiClient` façade.
  *
  * @api-declaration
  *   - export interface WorkOrder, WorkerResult
@@ -89,6 +85,8 @@ export class ApiPoolManager {
         return result;
       } catch (error) {
         if (this.isRetryableError(error)) {
+          // TYPE-GUARD-REASON: The `isRetryableError` method already confirms that `error` is an
+          // instance of `Error`, so this cast is safe for the purpose of logging the message.
           logger.warn(`Key ${currentKey.id} failed with a retryable error. Trying next key.`, {
             error: (error as Error).message,
           });

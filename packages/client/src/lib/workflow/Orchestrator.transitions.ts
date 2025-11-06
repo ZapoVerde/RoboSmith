@@ -22,6 +22,7 @@
  */
 
 import { assembleContext } from './Orchestrator.context';
+import { executeAction } from './ActionHandler';
 import type {
   BlockDefinition,
   ExecutionPayload,
@@ -46,18 +47,12 @@ export class Orchestrator {
   private returnStack: string[] = [];
   private isHalted = false;
 
-  // NEW: Store the injected ContextPartitionerService dependency
-  private contextService: ContextPartitionerService;
-
   constructor(
     private readonly manifest: WorkflowManifest,
-    contextService: ContextPartitionerService, // Receives injected dependency
+    private readonly contextService: ContextPartitionerService,
     private readonly apiManager: ApiPoolManager,
     private readonly onStateUpdate: (state: PlanningState) => void
-  ) {
-      // Set the injected dependency
-      this.contextService = contextService;
-  }
+  ) {}
 
   public async executeNode(startNodeId: string): Promise<void> {
     const startNode = this.manifest[startNodeId];
@@ -74,9 +69,6 @@ export class Orchestrator {
       logger.debug(`Executing block: ${this.currentBlockId}`);
       this.publishState();
 
-      // In a later task, contextService calls will occur here, before apiManager.execute.
-      // E.g., const contextSlice = await this.contextService.getContext(block.contextSlice, worktreePath);
-
       const context = assembleContext(
         this.manifest,
         block,
@@ -89,20 +81,15 @@ export class Orchestrator {
       const result: WorkerResult = await this.apiManager.execute(workOrder);
       this.executionPayload = result.newPayload;
 
-      // FIX: Implement the correct two-step fallback logic.
       let transition = block.transitions.find((t) => t.on_signal === result.signal);
 
-      // Step 1: Look for a direct signal match.
       if (!transition) {
-        // Step 2: If no direct match, look for the default fallback.
         transition = block.transitions.find((t) => t.on_signal === 'SIGNAL:FAIL_DEFAULT');
       }
 
-      // If a transition (either direct or fallback) was found, execute it.
       if (transition) {
         this.handleAction(transition.action);
       } else {
-        // If neither was found, this is a terminal block for this signal. End gracefully.
         logger.debug(`No transition for signal "${result.signal}" and no default. Terminating.`);
         this.currentBlockId = null;
       }
@@ -112,58 +99,26 @@ export class Orchestrator {
   }
 
   private handleAction(action: string): void {
-    // FIX: Correctly parse actions with and without targets (like 'RETURN').
-    const separatorIndex = action.indexOf(':');
-    let command: string;
-    let target: string | undefined;
+    const result = executeAction({
+      action,
+      currentStack: this.returnStack,
+    });
 
-    if (separatorIndex === -1) {
-      command = action;
-      target = undefined;
-    } else {
-      command = action.substring(0, separatorIndex);
-      target = action.substring(separatorIndex + 1);
-    }
-
-    switch (command) {
-      case 'JUMP':
-        if (target) {
-          logger.debug(`Jumping to block: ${target}`);
-          this.currentBlockId = target;
-        } else {
-          throw new WorkflowHaltedError(`JUMP action is missing a target.`);
-        }
-        break;
-
-        case 'CALL': {
-          if (!target) {
-            throw new WorkflowHaltedError(`CALL action is missing a target node.`);
-          }
-  
-          logger.debug(`Calling node: ${target}`);
-          const targetNode = this.manifest[target];
-          if (!targetNode) {
-            throw new WorkflowHaltedError(`Target node "${target}" for CALL action not found.`);
-          }
-          this.returnStack.push('Node:Parent__Block:AfterReturn');
-          this.currentBlockId = targetNode.entry_block;
-          break;
-        }
-
-      case 'RETURN': {
-        logger.debug('Returning from node call.');
-        const returnAddress = this.returnStack.pop();
-        if (!returnAddress) {
-          throw new WorkflowHaltedError('Attempted to RETURN from an empty call stack.');
-        }
-        this.currentBlockId = returnAddress;
-        break;
+    // FIX: This is the critical logic correction.
+    // If the next ID from the action handler does not contain '__', it's a Node ID from a CALL.
+    // We must look up that node's entry_block to get the correct next Block ID.
+    if (result.nextBlockId && !result.nextBlockId.includes('__')) {
+      const targetNodeId = result.nextBlockId;
+      const targetNode = this.manifest[targetNodeId];
+      if (!targetNode) {
+        throw new WorkflowHaltedError(`Target node "${targetNodeId}" for CALL action not found.`);
       }
-
-      default:
-        this.isHalted = true;
-        throw new WorkflowHaltedError(`Unknown action command: "${command}"`);
+      this.currentBlockId = targetNode.entry_block;
+    } else {
+      this.currentBlockId = result.nextBlockId;
     }
+
+    this.returnStack = result.nextStack;
   }
 
   private findNodeAndBlock(blockId: string): { node: NodeDefinition; block: BlockDefinition } {
