@@ -29,7 +29,7 @@ import type {
   NodeDefinition,
   WorkflowManifest,
 } from '../../shared/types';
-import { WorkflowHaltedError } from './Orchestrator.transitions';
+import { WorkflowHaltedError } from './Orchestrator';
 
 /**
  * Finds the node and block definitions for a given block ID.

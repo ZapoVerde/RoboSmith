@@ -1,6 +1,6 @@
 /**
  * @file packages/client/src/lib/ai/ApiPoolManager.spec.ts
- * @stamp S-20251102-T140000Z-V-FINAL-WITH-PREAMBLE
+ * @stamp S-20251107T114100Z-C-WORKTREE-AWARE-TEST
  * @test-target packages/client/src/lib/ai/ApiPoolManager.ts
  * @description
  * Verifies the complete functionality of the ApiPoolManager, including its singleton
@@ -50,6 +50,7 @@ describe('ApiPoolManager', () => {
   const sampleWorkOrder: WorkOrder = {
     worker: 'Worker:Test',
     context: [],
+    worktreePath: '/mock/worktree',
   };
 
   beforeEach(() => {

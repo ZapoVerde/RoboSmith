@@ -1,11 +1,11 @@
 /**
  * @file packages/client/src/lib/git/GitWorktreeManager.ts
- * @stamp S-20251105T195212Z-C-ARCH-COMPLIANT
+ * @stamp S-20251107T085300Z-C-CONFLICT-SCAN-ADDED
  * @architectural-role Orchestrator
  * @description
  * The authoritative service for orchestrating the lifecycle, state, and
  * conflict detection of all Git worktrees. It is a pure orchestrator that
- * depends on an injected GitAdapter to perform all I/O.
+ * depends on an injected IGitAdapter to perform all I/O.
  * @core-principles
  * 1. OWNS the stateful logic for the worktree reconciliation loop.
  * 2. DELEGATES all Git commands, file system reads, and state persistence to the adapter.

@@ -1,6 +1,6 @@
 /**
  * @file packages/client/src/lib/ai/ApiPoolManager.ts
- * @stamp S-20251102-T140000Z-C-FINAL-WITH-PREAMBLE
+ * @stamp S-20251107T114000Z-C-WORKTREE-AWARE
  * @architectural-role Orchestrator
  * @description Implements the core stateful orchestrator for the AI Service Layer. It manages the pool of `ApiKey`s, executes the "key carousel" logic, and handles failover.
  * @core-principles
@@ -9,7 +9,8 @@
  * 3. DELEGATES all actual network I/O to the stateless `aiClient` façade.
  *
  * @api-declaration
- *   - export interface WorkOrder, WorkerResult
+ *   - export interface WorkOrder { ..., worktreePath: string }
+ *   - export interface WorkerResult
  *   - export class AllApiKeysFailedError
  *   - export class ApiPoolManager
  *   -   public static getInstance(secureStorageService: SecureStorageService): ApiPoolManager
@@ -31,6 +32,7 @@ import type { ExecutionPayload } from '../../shared/types';
 export interface WorkOrder {
   worker: string;
   context: ExecutionPayload;
+  worktreePath: string;
 }
 
 export interface WorkerResult {
@@ -80,7 +82,7 @@ export class ApiPoolManager {
 
       try {
         logger.debug(`Attempting AI call with key: ${currentKey.id}`);
-        const result = await this.makeApiCall(workOrder, currentKey);
+        const result = await this.makeApiCall(workOrder, currentKey, workOrder.worktreePath);
         logger.info(`AI call successful with key: ${currentKey.id}`);
         return result;
       } catch (error) {
@@ -114,11 +116,14 @@ export class ApiPoolManager {
     return false;
   }
 
-  private async makeApiCall(workOrder: WorkOrder, key: ApiKey): Promise<WorkerResult> {
+  private async makeApiCall(workOrder: WorkOrder, key: ApiKey, worktreePath: string): Promise<WorkerResult> {
     if (key.secret.includes('fail-rate-limit')) throw new Error('MOCK ERROR: Rate limit exceeded');
     if (key.secret.includes('fail-invalid')) throw new Error('MOCK ERROR: Invalid API Key');
     if (key.secret.includes('fail-server')) throw new Error('MOCK ERROR: 500 Internal Server Error');
     
+    // The worktreePath is now available here but unused for now.
+    logger.debug(`API call would execute in context of: ${worktreePath}`);
+
     return {
       signal: 'SIGNAL:SUCCESS',
       newPayload: workOrder.context,

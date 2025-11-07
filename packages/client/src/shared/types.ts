@@ -1,6 +1,6 @@
 /**
  * @file packages/client/src/shared/types.ts
- * @stamp S-20251102T031500Z-C-REFACTORED
+ * @stamp {"timestamp":"2025-11-07T15:12:00.000Z"}
  * @architectural-role Type Definition
  * @description
  * Defines the complete, bidirectional message contract for the asynchronous event
@@ -13,8 +13,8 @@
  * 3. ENFORCES the final, hardened architectural model of Nodes, Blocks, and Payloads.
  *
  * @api-declaration
- *   - Type Aliases for Event Bus: `Message`, `ExtensionMessage`
- *   - Interfaces for Workflow Engine: `ContextSegment`, `Transition`, `BlockDefinition`, `NodeDefinition`
+ *   - Type Aliases for Event Bus: `Message`, `ExtensionMessage`, `FinalDecisionMessage`
+ *   - Interfaces for Workflow Engine: `ContextSegment`, `Transition`, `BlockDefinition`, `NodeDefinition`, `WorkflowManifest`, `PlanningState`, `WorkflowViewState`, `TaskReadyForIntegrationMessage`
  *   - Type Alias for Workflow Engine: `ExecutionPayload`
  *
  * @contract
@@ -25,6 +25,7 @@
  */
 
 import type { ApiKey } from '@shared/domain/api-key';
+import type { CreateWorktreeArgs } from '../lib/git/GitWorktreeManager';
 
 // --- I. WORKFLOW ENGINE DATA CONTRACTS ---
 
@@ -100,6 +101,16 @@ export type WorkflowManifest = Record<string, NodeDefinition>;
 // --- INCOMING MESSAGES (WebView -> Extension Host) ---
 
 /**
+ * @id packages/client/src/shared/types.ts#FinalDecisionMessage
+ * @description A discriminated union of all possible messages sent from the Integration Panel to the backend, capturing the user's final disposition of the completed work.
+ */
+export type FinalDecisionMessage =
+  | { command: 'openTerminalInWorktree'; payload: { sessionId: string } }
+  | { command: 'acceptAndMerge'; payload: { sessionId: string } }
+  | { command: 'rejectAndDiscard'; payload: { sessionId: string } }
+  | { command: 'finishAndHold'; payload: { sessionId: string } };
+
+/**
  * A map of all possible commands sent from the UI to the backend, with their
  * corresponding payload types.
  */
@@ -111,12 +122,22 @@ type CommandPayloadMap = {
 
   // Workflow Control
   startWorkflow: {
-    nodeId: string; // The entry point Node for the new workflow.
+    args: CreateWorktreeArgs;
+    nodeId: string;
   };
   userAction: {
     action: 'proceed' | 'revise' | 'abort';
     sessionId: string;
   };
+
+  // UI Interaction
+  blockSelected: { blockId: string };
+
+  // Integration Panel Actions
+  openTerminalInWorktree: { sessionId: string };
+  acceptAndMerge: { sessionId: string };
+  rejectAndDiscard: { sessionId: string };
+  finishAndHold: { sessionId: string };
 };
 
 /**
@@ -136,12 +157,13 @@ export type Message = {
 /**
  * @id packages/client/src/shared/types.ts#PlanningState
  * @description Represents a complete snapshot of an executing workflow's state, designed to be sent to the UI for real-time visualization.
+ * @deprecated Use `WorkflowViewState` for the rich, graph-based UI.
  */
 export interface PlanningState {
   /** The ID of the Node currently being executed. */
   currentNodeId: string;
   /** The ID of the Block currently in progress or that has just completed. */
-  currentBlockId: string;
+  currentBlockId: string | null;
   /** The complete, ordered "chatbox" history to be rendered in the UI. */
   executionPayload: ExecutionPayload;
   /** A flag indicating if the workflow is paused and waiting for user input. */
@@ -151,15 +173,91 @@ export interface PlanningState {
 }
 
 /**
+ * @id packages/client/src/shared/types.ts#WorkflowViewState
+ * @description
+ * Represents the complete, real-time state of the Mission Control panel,
+ * sent from the Extension Host to the WebView with every update. It is the
+ * single source of truth for the UI's reactive rendering.
+ */
+export interface WorkflowViewState {
+  /**
+   * The static blueprint of the currently executing workflow node's graph.
+   * This is used to draw the flowchart.
+   */
+  graph: {
+    nodeId: string;
+    blocks: Record<string, { name: string }>;
+    transitions: Array<{ from: string; to: string; signal: string }>;
+  };
+
+  /**
+   * A map of the live status for each block in the graph.
+   * e.g., { "Block:GenerateCode": "complete", "Block:RunTests": "active" }
+   */
+  statuses: Record<string, 'complete' | 'active' | 'pending' | 'failed'>;
+
+  /**
+   * The most recent transition that occurred, used to animate the "lit path."
+   */
+  lastTransition: {
+    fromBlock: string;
+    toBlock: string;
+    signal: string;
+  } | null;
+
+  /**
+   * A complete, detailed log of all inputs and outputs for every block that
+   * has executed. Used to populate the inspector panels when a block is selected.
+   */
+  executionLog: Record<string, {
+    context: ContextSegment[];
+    conversation: ContextSegment[];
+  }>;
+
+  /**
+   * A summary of all active workflows, used to render the top status ticker.
+   */
+  allWorkflowsStatus: Array<{
+    sessionId: string;
+    name: string;
+    health: 'GREEN' | 'AMBER' | 'RED';
+    queue: 'IDLE' | 'QUEUED' | 'RUNNING' | 'COMPLETE';
+  }>;
+}
+
+/**
+ * @id packages/client/src/shared/types.ts#TaskReadyForIntegrationMessage
+ * @description
+ * Defines the message contract sent from the backend to the UI to signal a
+ * workflow's successful completion and trigger the display of the Integration Panel.
+ */
+export interface TaskReadyForIntegrationMessage {
+  /** The command identifier for this message type. */
+  command: 'taskReadyForIntegration';
+  /** The data payload containing all necessary details for the Integration Panel. */
+  payload: {
+    /** The unique session ID of the completed workflow. */
+    sessionId: string;
+    /** The name of the Git branch containing the completed work. */
+    branchName: string;
+    /** The AI-generated summary of changes to be used as a commit message. */
+    commitMessage: string;
+    /** A list of file paths that were modified during the workflow. */
+    changedFiles: string[];
+  };
+}
+
+/**
  * @id packages/client/src/shared/types.ts#ExtensionMessage
  * @description The discriminated union type for all messages sent FROM the Extension Host TO the WebView.
  */
 export type ExtensionMessage =
   | {
-      command: 'planningStateUpdate';
-      payload: PlanningState;
+      command: 'workflowStateUpdate';
+      payload: WorkflowViewState;
     }
   | {
       command: 'apiKeyListUpdate';
       payload: { apiKeys: ApiKey[] };
-    };
+    }
+  | TaskReadyForIntegrationMessage;

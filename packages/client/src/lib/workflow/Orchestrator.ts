@@ -1,24 +1,24 @@
 /**
- * @file packages/client/src/lib/workflow/Orchestrator.transitions.ts
- * @stamp S-20251106T154021Z-C-PREAMBLE-MERGE
+ * @file packages/client/src/lib/workflow/Orchestrator.ts
+ * @stamp S-20251107T130000Z-C-REFACTOR-FINALIZE
  * @architectural-role Orchestrator
- * @description The deterministic, graph-based execution engine. This module contains
- * the core state machine logic and depends on injected services for all I/O.
+ * @description The deterministic, stateful, graph-based execution engine for all workflows. It is the central class that manages the execution loop, runtime state, and delegation to I/O services.
  * @core-principles
  * 1. IS a deterministic state machine, not a speculative agent.
- * 2. OWNS the execution loop and runtime state (Payload, Return Stack).
- * 3. DELEGATES all AI calls and context slicing to injected services.
+ * 2. OWNS the execution loop and runtime state (Execution Payload, Return Stack, Current Block).
+ * 3. DELEGATES all AI calls, context slicing, and action parsing to injected services and helpers.
  *
  * @api-declaration
+ *   - export class WorkflowHaltedError extends Error
  *   - export class Orchestrator
- *   -   constructor(manifest: WorkflowManifest, contextService: ContextPartitionerService, apiManager: ApiPoolManager, onStateUpdate: (state: PlanningState) => void)
- *   -   public async executeNode(startNodeId: string): Promise<void>
+ *   -   public constructor(manifest, contextService, apiManager, onStateUpdate)
+ *   -   public async executeNode(startNodeId: string, worktreePath: string): Promise<void>
  *
  * @contract
  *   assertions:
- *     purity: mutates          # Owns and mutates internal state: executionPayload, returnStack.
- *     external_io: https_apis  # Delegates to ApiPoolManager which performs external I/O.
- *     state_ownership: none    # Does not own global application state.
+ *     - purity: "mutates"       # Owns and mutates its internal runtime state.
+ *     - external_io: "https_apis" # Delegates to ApiPoolManager which performs external I/O.
+ *     - state_ownership: "['currentBlockId', 'executionPayload', 'returnStack']"
  */
 
 import { assembleContext } from './Orchestrator.context';
@@ -46,6 +46,7 @@ export class Orchestrator {
   private executionPayload: ExecutionPayload = [];
   private returnStack: string[] = [];
   private isHalted = false;
+  private worktreePath: string = '';
 
   constructor(
     private readonly manifest: WorkflowManifest,
@@ -54,11 +55,12 @@ export class Orchestrator {
     private readonly onStateUpdate: (state: PlanningState) => void
   ) {}
 
-  public async executeNode(startNodeId: string): Promise<void> {
+  public async executeNode(startNodeId: string, worktreePath: string): Promise<void> {
     const startNode = this.manifest[startNodeId];
     if (!startNode) {
       throw new WorkflowHaltedError(`Start node "${startNodeId}" not found in manifest.`);
     }
+    this.worktreePath = worktreePath;
     this.currentBlockId = startNode.entry_block;
     await this.run();
   }
@@ -77,7 +79,11 @@ export class Orchestrator {
         this.returnStack
       );
 
-      const workOrder: WorkOrder = { worker: block.worker, context };
+      const workOrder: WorkOrder = {
+        worker: block.worker,
+        context,
+        worktreePath: this.worktreePath,
+      };
       const result: WorkerResult = await this.apiManager.execute(workOrder);
       this.executionPayload = result.newPayload;
 
@@ -141,7 +147,7 @@ export class Orchestrator {
     const nodeId = this.currentBlockId ? this.currentBlockId.split('__')[0] : '';
     const state: PlanningState = {
       currentNodeId: nodeId,
-      currentBlockId: this.currentBlockId || '',
+      currentBlockId: this.currentBlockId, 
       executionPayload: this.executionPayload,
       isHalted: this.isHalted,
       errorMessage: null,

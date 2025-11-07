@@ -1,6 +1,6 @@
 /**
  * @file packages/client/src/extension.ts
- * @stamp S-20251106T150000Z-C-COMPOSITION-ROOT-FIX
+ * @stamp S-20251107T094000Z-C-QUEUE-COMPOSITION
  * @architectural-role Feature Entry Point
  * @description The main activation entry point for the VS Code extension. It is responsible for initializing all singleton services and setting up the application's composition root.
  * @core-principles
@@ -19,6 +19,9 @@ import { ContextPartitionerService } from './lib/context/ContextPartitionerServi
 import { R_Mcp_ServerManager, type JsonRpcClientFactory, type JsonRpcClient } from './lib/context/R_Mcp_ServerManager';
 import { RealProcessSpawner } from './lib/context/RealProcessSpawner';
 import type { ManagedProcess } from './lib/context/IProcessSpawner';
+import { RealGitAdapter } from './lib/git/RealGitAdapter';
+import { GitWorktreeManager } from './lib/git/GitWorktreeManager';
+import { WorktreeQueueManager } from './lib/workflow/WorktreeQueueManager';
 
 // TEMPORARY STUB: This must be replaced with the actual RPC library when chosen.
 const MockJsonRpcClientFactory: JsonRpcClientFactory = (_process: ManagedProcess): JsonRpcClient => {
@@ -31,20 +34,38 @@ const MockJsonRpcClientFactory: JsonRpcClientFactory = (_process: ManagedProcess
 };
 
 export async function activate(context: vscode.ExtensionContext) {
+  // --- 1. Initialize Logger (Must be first) ---
   logger.initialize(context.extensionMode);
   logger.info('RoboSmith extension activating...');
 
+  // --- 2. Composition Root: Service Instantiation & Dependency Injection ---
   logger.info('Instantiating services...');
   
+  // Low-level, concrete adapters are created first.
   const realProcessSpawner = new RealProcessSpawner();
+  const realGitAdapter = new RealGitAdapter(context);
+
+  // High-level services are now instantiated by injecting their dependencies.
   const secureStorageService = new SecureStorageService(context.secrets);
   const apiPoolManager = ApiPoolManager.getInstance(secureStorageService);
   const rMcpServerManager = new R_Mcp_ServerManager(realProcessSpawner, MockJsonRpcClientFactory);
   const contextPartitionerService = new ContextPartitionerService(rMcpServerManager);
+  const gitWorktreeManager = new GitWorktreeManager(realGitAdapter);
+  const worktreeQueueManager = new WorktreeQueueManager(gitWorktreeManager);
 
-  await apiPoolManager.initialize();
-  logger.info('All services instantiated. API Pool Manager initialized.');
+  // --- 3. Service Initialization ---
+  // --- 3. Service Initialization ---
+  try {
+    await apiPoolManager.initialize();
+    await gitWorktreeManager.initialize();
+    logger.info('All services instantiated and initialized.');
+  } catch (error) {
+    logger.error('Failed to initialize a core service. Aborting activation.', { error });
+    vscode.window.showErrorMessage(`RoboSmith failed to start: ${(error as Error).message}`);
+    return; // Abort activation completely.
+  }
 
+  // --- 4. Load and Validate Workflow Manifest ---
   const workspaceFolders = vscode.workspace.workspaceFolders;
   if (!workspaceFolders) {
     logger.error('No workspace folder is open. Cannot find workflow manifest.');
@@ -64,6 +85,7 @@ export async function activate(context: vscode.ExtensionContext) {
     return;
   }
 
+  // --- 5. Command Registration ---
   const disposable = vscode.commands.registerCommand('roboSmith.showPanel', () => {
     const panel = vscode.window.createWebviewPanel(
       'roboSmithPanel', 'RoboSmith', vscode.ViewColumn.One, { enableScripts: true }
@@ -75,6 +97,7 @@ export async function activate(context: vscode.ExtensionContext) {
       manifest: manifest,
       panel: panel,
       contextService: contextPartitionerService,
+      worktreeQueueManager: worktreeQueueManager,
     };
 
     const handleEvent = createEventHandler();
@@ -95,6 +118,9 @@ export function deactivate(): void {
   logger.info('RoboSmith extension deactivated.');
 }
 
+/**
+ * A placeholder for the webview's HTML content.
+ */
 function getWebviewContent() {
   return `<!DOCTYPE html>
   <html lang="en">

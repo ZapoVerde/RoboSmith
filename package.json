@@ -8,7 +8,7 @@
     "lint": "eslint . --ext .ts,.tsx",
     "format": "prettier --write .",
     "// --- CONTEXT SLICER (Development) ---": "",
-    "dev:slicer": "run-p dev:slicer:ui dev:slicer:watcher",
+    "slicer": "run-p dev:slicer:ui dev:slicer:watcher",
     "dev:slicer:ui": "cd context-slicer && pnpm dev",
     "dev:slicer:watcher": "cd context-slicer && node --loader ts-node/esm scripts/generate-dump.ts --watch"
   },

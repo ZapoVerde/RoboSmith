@@ -2,8 +2,8 @@
  * @file packages/client/src/lib/git/GitWorktreeManager.spec.ts
  * @test-target packages/client/src/lib/git/GitWorktreeManager.ts
  * @description Verifies the orchestration logic of the GitWorktreeManager in
- * isolation by providing a mocked GitAdapter. It tests the self-healing
- * reconciliation loop, state management, and command delegation.
+ * isolation by providing a mocked IGitAdapter. It tests the self-healing
+ * reconciliation loop, state management, command delegation, and the new conflict scan logic.
  * @criticality The test target is CRITICAL.
  * @testing-layer Unit
  */
