@@ -78,41 +78,49 @@ This interactive and dynamic scanning system is the foundational architectural c
 
 To ensure robustness against application crashes, restarts, and manual file system changes, the `GitWorktreeManager`'s state is **not ephemeral**. It is persisted between sessions, and a reconciliation process is run on every extension activation to guarantee that the in-memory state is a perfect reflection of the file system's reality.
 
-#### 3.1. Persistence Mechanism
+#### 3.1. Persistence Model: Pointers and Commits
 
-- **The Source of Truth:** The list of managed `WorktreeSession` objects is persisted in VS Code's native, resilient key-value store using the `vscode.ExtensionContext.globalState` API.
-- **Key:** The data is stored under a dedicated key, e.g., `activeWorktreeSessions`.
-- **Process:** After any successful operation that changes the set of active worktrees (e.g., `createWorktree`, `removeWorktree`, or changing a task's status to `Held`), the service's internal `sessionMap` is serialized and written back to `globalState` using `globalState.update()`.
+The persistence model is a two-part system designed for lightweight central state and durable, heavy state:
+
+1.  **The Lightweight Pointer Map (in `globalState`):**
+    * **The Source of Truth:** A list of managed `WorktreeSession` *pointers* is persisted in VS Code's native, resilient key-value store using the `vscode.ExtensionContext.globalState` API.
+    * **Key:** The data is stored under a dedicated key, e.g., `activeWorktreeSessions`.
+    * **Contents:** This map is lightweight and **MUST NOT** contain heavy `ExecutionPayload`s. It only stores the minimal pointers: `sessionId`, `branchName`, and `status` (e.g., `Running`, `Held`).
+
+2.  **The Durable Session State (in Git):**
+    * **The Source of Truth:** The complete, heavy state of a workflow (the full `ExecutionPayload` chat history, `currentBlockId`, and `returnStack`) is **not** stored in `globalState`.
+    * **Process:** Upon a `[⏸️ Finish & Hold Branch]` action, this heavy state is serialized to a file (e.g., `.robo/session.json`) and **committed directly to its corresponding Git branch**.
+    * **Reference:** This entire "re-inflatable" process is formally defined in **`docs/architecture/Durable_Session_Persistence.md`**.
+
+This hybrid model ensures the central state is fast and simple, while the complex, heavy state is made durable and portable by storing it as a version-controlled artifact.
 
 #### 3.2. The Startup Reconciliation Loop
 
-On every extension activation, before any other commands are made available, the `GitWorktreeManager` MUST perform a self-healing reconciliation loop to synchronize its state.
+On every extension activation, before any other commands are made available, the `GitWorktreeManager` MUST perform a self-healing reconciliation loop to synchronize its **pointer map**.
 
 **The Algorithm:**
 
 1.  **Read the Ground Truth (The File System):**
-    *   The service uses the `vscode.workspace.fs.readDirectory()` API to get a complete list of all subdirectories currently present in the project's `.worktrees/` folder. This is the list of *actual* worktrees on disk.
+    * The service uses the `vscode.workspace.fs.readDirectory()` API to get a complete list of all subdirectories currently present in the project's `.worktrees/` folder. This is the list of *actual* local worktrees on disk.
 
 2.  **Read the Cached State (The Extension's Memory):**
-    *   The service reads its last-known state from `globalState.get('activeWorktreeSessions')`. This is the list of worktrees the extension *thinks* it's managing.
+    * The service reads its last-known pointer map from `globalState.get('activeWorktreeSessions')`. This is the list of worktrees the extension *thinks* it's managing.
 
 3.  **Identify and Handle "Zombies":**
-    *   A "zombie" is a directory on disk that is **not** present in the cached state. This indicates a previous crash or an incomplete cleanup.
-    *   The service identifies these zombies by finding all directories from Step 1 that do not have a corresponding entry in the map from Step 2.
-    *   **Action:** For V1, the service will log a warning for each zombie found. A future `roboSmith.cleanupWorktrees` command will provide a UI to safely remove them.
+    * A "zombie" is a directory on disk that is **not** present in the cached state. This indicates a previous crash or an incomplete cleanup.
+    * The service identifies these zombies by finding all directories from Step 1 that do not have a corresponding entry in the map from Step 2.
+    * **Action:** For V1, the service will log a warning for each zombie found. A future `roboSmith.cleanupWorktrees` command will provide a UI to safely remove them.
 
 4.  **Identify and Handle "Ghosts":**
-    *   A "ghost" is an entry in the cached state that does **not** have a corresponding directory on disk. This indicates the user manually deleted the folder.
-    *   The service identifies these ghosts by finding all entries from Step 2 that do not have a corresponding directory in the list from Step 1.
-    *   **Action:** The service silently and safely removes the ghost entries from its state object. This is a self-healing action.
+    * A "ghost" is an entry in the cached state that does **not** have a corresponding directory on disk. This indicates the user manually deleted the folder.
+    * The service identifies these ghosts by finding all entries from Step 2 that do not have a corresponding directory in the list from Step 1.
+    * **Action:** The service silently and safely removes the ghost entries from its state object. This is a self-healing action.
 
 5.  **Persist the Corrected State:**
-    *   If any ghosts were removed, the service immediately calls `globalState.update()` to save the newly cleaned-up state, ensuring consistency for the next startup.
+    * If any ghosts were removed, the service immediately calls `globalState.update()` to save the newly cleaned-up pointer map, ensuring consistency for the next startup.
 
 6.  **Initialize with Confidence:**
-    *   Only after this loop is complete is the `GitWorktreeManager` considered fully initialized. Its in-memory `sessionMap` is now a perfect, trusted reflection of reality, and the extension can proceed with normal operations.
-
-This reconciliation process is the core architectural pattern that makes the entire worktree system robust, reliable, and trustworthy.
+    * Only after this loop is complete is the `GitWorktreeManager` considered fully initialized. [cite_start]Its in-memory `sessionMap` is now a perfect, trusted reflection of reality, and the extension can proceed with normal operations [cite: 1034-1035].
 
 ### 4. Execution and Iteration Within the Worktree
 

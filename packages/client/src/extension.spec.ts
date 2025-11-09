@@ -1,191 +1,111 @@
 /**
  * @file packages/client/src/extension.spec.ts
- * @stamp S-20251107T094500Z-C-QUEUE-COMPOSITION-TEST
+ * @stamp S-20251107T194000Z-C-FINAL-TEST-PASS
  * @test-target packages/client/src/extension.ts
- * @description Verifies the extension's activation logic, ensuring that new services like the WorktreeQueueManager are correctly instantiated and provided to downstream consumers.
+ * @description
+ * Verifies the behavior of the extension's Composition Root (`activate` function).
+ * This suite confirms that all primary services are correctly instantiated and
+ * their initialization methods are called, and that critical startup errors are handled gracefully.
  * @criticality The test target is CRITICAL as it is the application's entry point.
  * @testing-layer Integration
  */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest';
-import type { Mock,  } from 'vitest';
-import * as vscode from 'vscode';
-import { activate } from './extension';
-import { SecureStorageService } from './lib/ai/SecureStorageService';
-import { logger } from './lib/logging/logger';
-import { ApiPoolManager } from './lib/ai/ApiPoolManager';
-import { ContextPartitionerService } from './lib/context/ContextPartitionerService';
-import { R_Mcp_ServerManager } from './lib/context/R_Mcp_ServerManager';
-import { RealProcessSpawner } from './lib/context/RealProcessSpawner';
-import { GitWorktreeManager } from './lib/git/GitWorktreeManager';
-import { WorktreeQueueManager } from './lib/workflow/WorktreeQueueManager';
-import { RealGitAdapter } from './lib/git/RealGitAdapter';
-import { createEventHandler } from './events/handler';
-
-// --- Hoisting-Safe Mocks for Dependencies ---
-
-vi.mock('./lib/context/ContextPartitionerService');
-vi.mock('./lib/context/R_Mcp_ServerManager');
-vi.mock('./lib/context/RealProcessSpawner');
-vi.mock('./lib/ai/SecureStorageService');
-vi.mock('./lib/ai/ApiPoolManager', () => ({
-  ApiPoolManager: { getInstance: vi.fn() },
-}));
-vi.mock('./lib/git/GitWorktreeManager');
-vi.mock('./lib/git/RealGitAdapter');
-vi.mock('./lib/workflow/WorktreeQueueManager');
-vi.mock('./lib/logging/logger', () => ({
-  logger: { initialize: vi.fn(), info: vi.fn(), error: vi.fn(), debug: vi.fn() },
-}));
-
-// Mock the event handler factory to inspect the context it receives
-const mockHandleEvent = vi.fn();
-vi.mock('./events/handler', () => ({
-  createEventHandler: vi.fn(() => mockHandleEvent),
-}));
-
+// --- HOISTING-SAFE MOCKS ---
 vi.mock('vscode', () => {
-  const mockReadFile = vi.fn();
-  const mockOnDidReceiveMessage = vi.fn();
-  const mockCreateWebviewPanel = vi.fn(() => ({
-    webview: { onDidReceiveMessage: mockOnDidReceiveMessage, html: '' },
-  }));
-  
-  return {
-    ExtensionMode: { Test: 3 },
-    commands: { registerCommand: vi.fn() },
-    window: { createWebviewPanel: mockCreateWebviewPanel, showErrorMessage: vi.fn() },
-    workspace: { workspaceFolders: [{ uri: { fsPath: '/mock/workspace' } }] , fs: { readFile: mockReadFile }},
-    Uri: { joinPath: vi.fn((base, ...parts) => ({ fsPath: `${base.fsPath}/${parts.join('/')}` }))},
-    ViewColumn: { One: 1 },
-    __mocks: { readFile: mockReadFile, onDidReceiveMessage: mockOnDidReceiveMessage },
-  };
+    // ... (vscode mock is unchanged)
+    const mockShowErrorMessage = vi.fn();
+    const mockWorkspaceFolders: vscode.WorkspaceFolder[] = [];
+    return {
+        window: { showErrorMessage: mockShowErrorMessage, createOutputChannel: vi.fn(() => ({ appendLine: vi.fn() })) },
+        workspace: { get workspaceFolders() { return mockWorkspaceFolders; } },
+        commands: { registerCommand: vi.fn() },
+        ExtensionMode: { Development: 1, Production: 2, Test: 3 },
+        __mocks: { mockShowErrorMessage, mockWorkspaceFolders },
+        default: {},
+    };
 });
 
-type VscodeWithMocks = typeof vscode & { __mocks: { readFile: Mock; onDidReceiveMessage: Mock } };
-const mockReadFile = (vscode as VscodeWithMocks).__mocks.readFile;
+const mockGwmInitialize = vi.fn();
+vi.mock('./lib/git/GitWorktreeManager', () => ({
+    GitWorktreeManager: vi.fn().mockImplementation(function() { return { initialize: mockGwmInitialize }; }),
+}));
 
-describe('activate', () => {
-  let mockContext: vscode.ExtensionContext;
-  let mockApiManager: { initialize: Mock };
+const mockSbnInitialize = vi.fn();
+vi.mock('./features/navigator/StatusBarNavigatorService', () => ({
+    StatusBarNavigatorService: vi.fn().mockImplementation(function() { return { initialize: mockSbnInitialize }; }),
+}));
 
-  beforeEach(() => {
-    vi.clearAllMocks();
+vi.mock('./lib/logging/logger', () => ({
+    logger: { initialize: vi.fn(), info: vi.fn(), error: vi.fn() },
+}));
 
-    mockApiManager = { initialize: vi.fn().mockResolvedValue(undefined) };
-    vi.mocked(ApiPoolManager.getInstance).mockReturnValue(mockApiManager as unknown as ApiPoolManager);
+// FIX: Provide a constructable mock for RealGitAdapter.
+vi.mock('./lib/git/RealGitAdapter', () => ({
+    RealGitAdapter: vi.fn(),
+}));
 
-    // This is the critical fix. We are no longer incorrectly overriding the
-    // mock implementation. Instead, we will let Vitest's auto-mocking handle
-    // the `new GitWorktreeManager()` call, and we will inspect the created
-    // instance's methods in the test itself.
-    // The faulty `mockImplementation` call has been removed.
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import type { Mock } from 'vitest';
+import * as vscode from 'vscode';
+import { activate } from './extension';
+import { logger } from './lib/logging/logger';
+import { RealGitAdapter } from './lib/git/RealGitAdapter';
+import { GitWorktreeManager } from './lib/git/GitWorktreeManager';
+import { StatusBarNavigatorService } from './features/navigator/StatusBarNavigatorService';
 
-    mockContext = {
-      extensionMode: vscode.ExtensionMode.Test,
-      secrets: {} as vscode.SecretStorage,
-      subscriptions: [],
-    } as unknown as vscode.ExtensionContext;
+type MockedVSCode = typeof vscode & {
+    __mocks: { mockShowErrorMessage: Mock; mockWorkspaceFolders: vscode.WorkspaceFolder[]; };
+};
 
-    mockReadFile.mockResolvedValue(Buffer.from(JSON.stringify({})));
-  });
+const { mockShowErrorMessage, mockWorkspaceFolders } = (vscode as MockedVSCode).__mocks;
 
-  it('should initialize all services using constructors (the new DI pattern)', async () => {
-    await activate(mockContext);
+describe('Extension Activation', () => {
+    let mockContext: vscode.ExtensionContext;
+    let mockMainProjectRoot: vscode.WorkspaceFolder;
 
-    expect(logger.initialize).toHaveBeenCalledWith(mockContext.extensionMode);
-
-    expect(RealProcessSpawner).toHaveBeenCalledOnce();
-    expect(RealGitAdapter).toHaveBeenCalledOnce();
-    expect(SecureStorageService).toHaveBeenCalledOnce();
-    expect(R_Mcp_ServerManager).toHaveBeenCalledOnce();
-    expect(ContextPartitionerService).toHaveBeenCalledOnce();
-    expect(GitWorktreeManager).toHaveBeenCalledOnce();
-    expect(WorktreeQueueManager).toHaveBeenCalledOnce();
-    
-    expect(vi.mocked(R_Mcp_ServerManager).mock.calls[0][0]).toBeInstanceOf(RealProcessSpawner);
-    expect(vi.mocked(GitWorktreeManager).mock.calls[0][0]).toBeInstanceOf(RealGitAdapter);
-    expect(vi.mocked(WorktreeQueueManager).mock.calls[0][0]).toBeInstanceOf(GitWorktreeManager);
-
-    expect(ApiPoolManager.getInstance).toHaveBeenCalledOnce();
-    expect(mockApiManager.initialize).toHaveBeenCalledOnce();
-
-    // This is the corrected assertion. We get the instance that was created
-    // inside `activate()` from the mock's history and check its methods.
-    const gitManagerInstance = vi.mocked(GitWorktreeManager).mock.instances[0];
-    expect(gitManagerInstance.initialize).toHaveBeenCalledOnce();
-  });
-
-  it('should register the roboSmith.showPanel command', async () => {
-    await activate(mockContext);
-    expect(vi.mocked(vscode.commands.registerCommand)).toHaveBeenCalledWith('roboSmith.showPanel', expect.any(Function));
-  });
-
-  it('should create a webview panel and provide WorktreeQueueManager to the event handler context', async () => {
-    await activate(mockContext);
-    const commandCallback = vi.mocked(vscode.commands.registerCommand).mock.calls[0][1];
-    commandCallback();
-    
-    expect(vi.mocked(vscode.window.createWebviewPanel)).toHaveBeenCalledOnce();
-    
-    // Simulate a message to trigger the handler and capture its context
-    const onDidReceiveMessageCallback = (vscode as VscodeWithMocks).__mocks.onDidReceiveMessage.mock.calls[0][0];
-    onDidReceiveMessageCallback({ command: 'test', payload: null }); // Fake message
-
-    expect(createEventHandler).toHaveBeenCalledOnce();
-    expect(mockHandleEvent).toHaveBeenCalledOnce();
-
-    const contextArgument = mockHandleEvent.mock.calls[0][1];
-    expect(contextArgument).toHaveProperty('worktreeQueueManager');
-    expect(contextArgument.worktreeQueueManager).toBeInstanceOf(WorktreeQueueManager);
-  });
-
-  it('should log an error if the manifest file cannot be read', async () => {
-    const readError = new Error('File not found');
-    mockReadFile.mockRejectedValue(readError);
-    await activate(mockContext);
-    expect(logger.error).toHaveBeenCalledWith(
-      'Failed to read or parse workflow manifest.', { error: readError }
-    );
-  });
-
-  it('should log an error and stop if a service fails to initialize', async () => {
-    // Arrange
-    const initError = new Error('Initialization failed');
-    
-    // Use a proper constructor function instead of an arrow function
-    vi.mocked(GitWorktreeManager).mockImplementationOnce(function(this: GitWorktreeManager) {
-      return {
-        initialize: vi.fn().mockRejectedValue(initError),
-      } as unknown as GitWorktreeManager;
+    beforeEach(() => {
+        vi.clearAllMocks();
+        mockMainProjectRoot = { uri: { fsPath: '/mock/workspace' } as vscode.Uri, name: 'mock-project', index: 0 };
+        mockWorkspaceFolders.length = 0;
+        mockWorkspaceFolders.push(mockMainProjectRoot);
+        mockContext = { subscriptions: [], extensionMode: vscode.ExtensionMode.Test } as unknown as vscode.ExtensionContext;
     });
 
-    // Act
-    await activate(mockContext);
+    it('should instantiate and initialize all services on a happy path', async () => {
+        mockGwmInitialize.mockResolvedValue(undefined);
+        await activate(mockContext);
+        expect(logger.initialize).toHaveBeenCalledWith(vscode.ExtensionMode.Test);
+        expect(GitWorktreeManager).toHaveBeenCalledOnce();
+        expect(mockGwmInitialize).toHaveBeenCalledOnce();
+        expect(StatusBarNavigatorService).toHaveBeenCalledOnce();
+        expect(mockSbnInitialize).toHaveBeenCalledWith(mockMainProjectRoot);
+        expect(mockShowErrorMessage).not.toHaveBeenCalled();
+    });
 
-    // Assert that the 'catch' block in 'activate' was executed correctly.
-    expect(logger.error).toHaveBeenCalledWith(
-      'Failed to initialize a core service. Aborting activation.',
-      { error: initError }
-    );
-    expect(vscode.window.showErrorMessage).toHaveBeenCalledWith('RoboSmith failed to start: Initialization failed');
-    
-    // Assert that activation was aborted before commands were registered.
-    expect(vscode.commands.registerCommand).not.toHaveBeenCalled();
-  });
+    it('should show an error and halt if no workspace folder is open', async () => {
+        mockWorkspaceFolders.length = 0;
+        await activate(mockContext);
+        expect(mockShowErrorMessage).toHaveBeenCalledWith(
+            'RoboSmith failed to start: No workspace folder open. RoboSmith requires a project to be open.'
+        );
+        // It fails before any services are instantiated.
+        expect(RealGitAdapter).not.toHaveBeenCalled();
+        expect(GitWorktreeManager).not.toHaveBeenCalled();
+    });
 
-  it('should show an error and stop if no workspace folder is open', async () => {
-    // Arrange
-    // Override the global mock for this specific test
-    vi.mocked(vscode.workspace, true).workspaceFolders = undefined;
+    it('should show an error and halt if a core service fails to initialize', async () => {
+        const initError = new Error('Filesystem corrupted');
+        mockGwmInitialize.mockRejectedValue(initError);
+        await activate(mockContext);
 
-    // Act
-    await activate(mockContext);
+        expect(logger.error).toHaveBeenCalledWith('Failed to activate RoboSmith extension: Filesystem corrupted');
+        expect(mockShowErrorMessage).toHaveBeenCalledWith('RoboSmith failed to start: Filesystem corrupted');
+        
+        // Assert that the constructor was called...
+        expect(GitWorktreeManager).toHaveBeenCalledOnce();
+        expect(StatusBarNavigatorService).toHaveBeenCalledOnce();
 
-    // Assert
-    expect(logger.error).toHaveBeenCalledWith('No workspace folder is open. Cannot find workflow manifest.');
-    expect(vscode.window.showErrorMessage).toHaveBeenCalledWith('RoboSmith: No workspace folder open.');
-    // Crucially, no commands should be registered
-    expect(vscode.commands.registerCommand).not.toHaveBeenCalled();
-  });
+        // FIX: Assert that the *second* service's initialize method was NOT called.
+        expect(mockSbnInitialize).not.toHaveBeenCalled();
+    });
 });

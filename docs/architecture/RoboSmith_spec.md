@@ -36,7 +36,7 @@ This philosophy translates into the following non-negotiable architectural manda
 
 - **Mandate B: Context is Surgically Precise and Sourced from a Code Analysis Engine.**
   - The principle of "No unnecessary context, but all the necessary context" MUST be implemented via the integration of a **Programmable Context Partitioner**, a high-performance, polyglot, compiled binary named `roberto-mcp`.
-  - This tool runs as a **code analysis server engine**, which is queried by a dedicated `ContextPartitionerService` within the extension. The service uses a "One-Shot with Persistent Cache" model to request specific, structured information about the codebase (e.g., file outlines, symbol references, semantic search results).
+  - This tool runs as a **code analysis server engine**. The architecture uses an **"On-Demand Server-per-Worktree"** model: a dedicated server instance is spun up for each *active* workflow, providing high-speed, cached results.
   - The workflow manifest (`workflows.json`) will specify which named "slice" of context is required for each step. This is translated into a specific `r-mcp` tool call (e.g., `get_file_outline`, `code_search`) by the Orchestrator, ensuring each worker receives the minimal, purpose-built context it needs.
 
 - **Mandate C: The User's Role is "Management by Exception."**
@@ -67,7 +67,7 @@ This mission statement defines the following top-level feature requirements for 
 
 - **Requirement C: Faithful Automation via a Declarative Engine.**
   - The core of the system is the **`Orchestrator`** engine, whose sole purpose is to interpret and execute the `workflows.json` manifest with perfect fidelity.
-  - The engine's logic MUST be a state machine that fully supports the concepts of `Workers`, `Nodes`, `Steps`, and `Actions`, including multi-turn conversational nodes and conditional branching via the `execute_node` action.
+  - The engine's logic MUST be a state machine that fully supports the concepts of `Workers`, `Nodes`, `Blocks`, and `Actions` (like `JUMP`, `CALL`, `RETURN`), including multi-turn conversational blocks and conditional branching.
 
 - **Requirement D: Orchestration of AI Specialists.**
   - The system must implement the **`Worker`** concept. The user must be able to define a roster of workers in the manifest, each with a specific model and contract.
@@ -270,12 +270,11 @@ The Factory is the core orchestrator that executes the `workflows.json` manifest
 - **Workflow Manifest (`workflows.json`) Parsing:**
   - The Extension Host MUST, upon activation, locate, parse, and validate the `.vision/workflows.json` file against a predefined JSON Schema.
   - A dedicated `WorkflowService` shall be responsible for this loading and validation.
-
 - **Interactive Mission Control Panel (WebView):**
   - This UI SHALL be implemented as a VS Code WebView panel that opens in the main editor area when a workflow is active.
   - It is a **reactive component** that renders a rich `WorkflowViewState` object received from the Extension Host.
   - **`WorkflowViewState` Schema:** The payload sent from the backend MUST contain the complete data required to render the interactive graph, including the static blueprint (blocks, transitions), the live statuses, and the detailed execution log for inspection.
-  - **Interactivity:** The blocks rendered in the diagram MUST be selectable. Clicking a block MUST trigger a message to the backend to populate the Inspector Panels with the context and conversation for that specific step.
+  - **Interactivity:** The blocks rendered in the diagram MUST be selectable. Clicking a block MUST trigger a message to the backend to populate the singular **"Intervention Panel"** with the context and conversation for that specific step.
 
 ---
 
@@ -309,13 +308,16 @@ This section defines the implementation requirements for the core backend servic
 - **Implementation:** A singleton class `ApiPoolManager` instantiated in the Extension Host.
 - **Configuration:** It MUST load its roster of keys from the `SecureStorageService`.
 - **Interface:** It will expose a primary method, `execute(workOrder: WorkOrder): Promise<Result>`, which will contain the "failover-driven round-robin" logic for economic viability and robustness.
+- **Core Responsibility (Observability):** The `ApiPoolManager` is **also** responsible for logging every API call. It MUST create a durable, auditable `AiCallLog` file (capturing the request, response, token usage, and latency) for every transaction. This logging is a prerequisite for the "AI Call Inspector" feature.
 
 #### 3.3.2. Git Worktree Isolation & Management
 
 - **Authoritative Document:** The entire operational logic is defined in `docs/GitWorktree_System.md`. The implementation MUST adhere strictly to this design.
 - **Implementation:** A singleton class `GitWorktreeManager` will be instantiated.
 - **Key Responsibilities:** Creating/removing worktrees in response to the user's navigation choices, running the proactive conflict scan, and managing the FIFO queue for conflicting tasks.
-- **State Persistence:** The service MUST use the `vscode.ExtensionContext.globalState` API to persist its list of active sessions. This enables it to recover its state after a restart and perform reconciliation to prevent "zombie" or "ghost" worktrees.
+- **State Persistence:** The service MUST use the `vscode.ExtensionContext.globalState` API to persist a *lightweight pointer map* of its active sessions (e.g., branch name and status). The session's heavy state (the `ExecutionPayload`) is committed to the Git branch itself, as defined in `docs/architecture/Durable_Session_Persistence.md`. This enables the system to recover its state after a restart and perform reconciliation.
+
+---
 
 #### 3.3.3. The Integration Panel
 
@@ -326,14 +328,8 @@ This section defines the implementation requirements for the core backend servic
   - The panel MUST present three final action buttons:
     1.  **`[✅ Accept and Merge Branch]`**: Executes the Git commands to commit, merge the work, and clean up the worktree.
     2.  **`[❌ Reject and Discard Branch]`**: Executes the Git commands to permanently delete the worktree and branch.
-    3.  **`[⏸️ Finish & Hold Branch]`**: Updates the workflow's state to `Held` and preserves the worktree and branch for later action.
+    3.  **`[⏸️ Finish & Hold Branch]`**: Commits the workflow's complete state to the branch, then cleans up the local worktree. The session can be 're-inflated' later. See `docs/architecture/Durable_Session_Persistence.md` for details.
 
-#### 3.3.4. Quick Fix Mode
-
-- **Activation:** The extension MUST register a new command, `roboSmith.quickFix`, in `package.json`.
-- **Context Gathering:** The command handler will get the active editor and selection using `vscode.window.activeTextEditor`.
-- **UI:** It will create a temporary `WebviewPanel` for the chat interaction.
-- **Applying Changes:** The final code change MUST be applied as a `vscode.WorkspaceEdit`.
 
 #### 3.3.5. Programmable Context Partitioner (Integration)
 
@@ -356,13 +352,13 @@ This section defines the implementation requirements for the core backend servic
     - It translates high-level method calls from the `Orchestrator` (e.g., `getFileOutline(args)`) into the appropriate JSON-RPC `tools/call` messages.
     - It is completely stateless and delegates all process-management concerns by requesting the correct, active server client from the `R_Mcp_ServerManager` before sending a query.
 
-#### 3.3.6. Inspector Panels
+#### 3.3.6. The Intervention Panel (Inspector)
 
-- **Implementation:** A set of dedicated WebViews registered in the bottom "Panel" area (alongside the Terminal).
-- **Functionality:**
-    - **"RoboSmith Chat":** Displays the turn-by-turn conversation for the currently selected block.
-    - **"Context Inspector":** Displays the input context ("little icons") for the currently selected block.
-- **Context-Awareness:** These panels MUST listen for `blockSelected` events from the Mission Control Panel and filter their content accordingly, providing on-demand, deep-dive transparency.
+- **Implementation:** A dedicated, context-aware WebView registered in the bottom "Panel" area (alongside the Terminal).
+- **Functionality:** This panel serves a dual role for observability and control, replacing the separate "RoboSmith Chat" and "Quick Fix" concepts.
+    - **Observability Mode (Read-Only):** When the user selects a *running* or *completed* block in the Mission Control Panel, this panel displays the scrollable chat history (`ExecutionPayload`) and context for that block.
+    - **Intervention Mode (Interactive):** When the `Orchestrator` halts (due to a failure or a "Stepper Mode" pause), this panel automatically activates. It displays the scraped error context, provides a text input for the user to add manual guidance, and shows action buttons (e.g., `[Retry]`, `[Resume]`) to resume the workflow.
+    - **Context-Awareness:** The panel is driven by the `Orchestrator`'s state, automatically showing the right tools (read-only viewer vs. interactive controls) at the right time.
 
 ---
 
@@ -459,12 +455,12 @@ Successfully define a multi-step, multi-worker node (like `Implement`) in `workf
 - **Test Case:** A unit test for the `WorkflowService`.
 - **Prerequisites:**
   - A test `workflows.json` file must be created that defines a main node and a separate "troubleshooting" node.
-  - The main node must contain a step with an `onFailure` action of type `execute_node`, pointing to the troubleshooting node.
+  - The main node must contain a `Block` with a `transition` that, on failure, uses an `action` of `CALL:TroubleshootingNodeName`, pointing to the troubleshooting node.
 - **Execution:**
   - The `WorkflowService` must parse this manifest.
 - **Acceptance Criteria:**
   - The service must parse the file without errors.
-  - The parsed object in memory must correctly represent the defined structure, including the conditional branching logic. The test must assert that the `onFailure` action is correctly linked to the troubleshooting node definition.
+  - The parsed object in memory must correctly represent the defined structure, including the conditional branching logic. The test must assert that the `action` is correctly linked to the troubleshooting node definition.
 
 ---
 
@@ -476,7 +472,7 @@ Supervise the "Factory" as it autonomously executes a plan, only intervening whe
 
 #### 5.2.2. Elaboration for Implementation
 
-- **Test Case:** An integration test for the Orchestrator's "happy path" and "failure path."
+- **Test Case:** An integration test for the Orchestrator's "happy path" and "failure path".
 - **Prerequisites:**
   - A manifest must define a node with at least two steps, where the first step is configured with an `onSuccess` action of type `proceed`.
 - **Happy Path Execution:**
@@ -490,7 +486,7 @@ Supervise the "Factory" as it autonomously executes a plan, only intervening whe
   - The test initiates the node.
   - The AI worker for the first step is mocked to provide a response that **does not include** the `proceedSignal`.
 - **Failure Path Acceptance Criteria:**
-  - The orchestrator must immediately execute the `onFailure` action, which should be `stop_and_flag`.
+  - The orchestrator must immediately execute the `onFailure` action, which should be `HALT_AND_FLAG` (as defined in `docs/architecture/Internal_Workers_and_Actions.md`).
   - The UI must receive a final state update showing the first step's status as `🔴 Red (Action Required)`.
 
 ---
@@ -576,15 +572,16 @@ The core functionality of the system depends on the output of Large Language Mod
 
 #### 6.1.2. Mitigation Strategies
 
-- **Primary Mitigation: The Manifest-Driven Workflow Engine with Conditional Branching.**
-  - **Implementation Mandate:** The entire "Factory" and "Workbench" must be implemented as a state machine driven by the `workflows.json` manifest. This is the primary defense against AI unreliability. More importantly, the manifest's support for the `execute_node` action on failure allows the system to implement intelligent error handling. Instead of a simple retry, a failure can be routed to a specialized `Troubleshooter` node, which uses a different worker (e.g., Gemini 2.5 Flash) and a different contract specifically designed to fix broken code. This creates a robust, self-correcting system.
+- **Primary Mitigation: The "AI Output Processing Pattern" (Structural & Logical).**
+  - **Implementation Mandate:** The entire "Factory" and "Workbench" must be implemented as a state machine driven by the `workflows.json` manifest. This is the primary defense, which is executed in two phases as defined in `docs/architecture/AI_Output_Processing.md`:
+    1.  **Phase 1 (Structural): The "Validation-Fix Cycle."** The `Orchestrator` *first* validates all AI output against a Zod schema. If the AI output is malformed (e.g., invalid JSON), it is sent back to the AI with a `VALIDATION_ERROR` note to be fixed *before* it is ever written to disk or tested.
+    2.  **Phase 2 (Logical): The "Test-Fix Cycle."** Once output is structurally valid, it's written and tested. If a test fails, the manifest routes the workflow to a specialized `Troubleshooter` node, which receives the `TestResultSegment` (error log) to attempt an automated fix.
 
 - **Secondary Mitigation: Automated Validation Signals.**
-  - **Implementation Mandate:** The orchestrator's validation logic is a critical component. The system MUST implement the "keyword signal" (`validation.signal`) check after AI steps. If the signal is missing, the workflow MUST execute the defined `onFailure` action, triggering the robust branching logic described above. This prevents a "garbage in, garbage out" cascade.
+  - **Implementation Mandate:** The orchestrator's validation logic is a critical component. The system MUST implement the "keyword signal" check after AI steps. If the signal is missing, the workflow MUST execute the defined `onFailure` action, triggering the robust branching logic described above.
 
 - **Tertiary Mitigation: The AI Call Inspector.**
   - **Implementation Mandate:** The `AI Call Inspector` must be implemented as a core V1 feature. When an AI failure is too complex for the automated system to handle, this tool is the essential escape hatch for the human supervisor. It provides the necessary observability to understand _why_ the AI failed and the tooling to experiment with prompt changes.
-
 ---
 
 ### 6.2. Risk: Git Worktree Management is Complex and Fragile
@@ -618,12 +615,10 @@ The system is designed to be highly automated, making many AI calls in the backg
 
 - **Primary Mitigation: The API Pool Manager.**
   - **Implementation Mandate:** This is a mandatory V1 feature. It directly addresses the risk by allowing users to spread load across multiple keys, taking advantage of free tiers and different pricing models.
-
 - **Secondary Mitigation: The Programmable Context Partitioner.**
   - **Implementation Mandate:** This is the primary token-saving mechanism and is a core V1 feature. The `workflows.json` manifest MUST be able to specify a named `context_slice` for each step. This allows the system to provide the AI with the minimal, purpose-built context required for a specific task (e.g., a "Testing_Context" for a test-writing worker), which is far more efficient than a one-size-fits-all context.
-
 - **Tertiary Mitigation: Observability via the AI Call Inspector.**
-  - **Implementation Mandate:** Every logged AI call in the `AI Call Inspector` MUST include the token usage data (`tokens_used`) returned by the API. This gives the user a clear, auditable trail of their consumption, allowing them to identify which steps or workers in their workflow are the most expensive.
+  - **Implementation Mandate:** Every logged AI call in the `AI Call Inspector` MUST include the token usage data (`tokens_used`) and the call latency (`durationMs`) returned by the API. This gives the user a clear, auditable trail of their consumption and performance, allowing them to identify which steps or workers in their workflow are the most expensive or slowest.
 
 # RoboSmith Detailed Specification: Chapter 7
 

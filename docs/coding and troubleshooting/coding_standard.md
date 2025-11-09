@@ -1,11 +1,12 @@
+
 ---
 
-# **The AiAnvil Project: Coding Standard**
+# **Project Coding Standard**
 
 **Document-Type:** Engineering Standard & Style Guide
 
 ### **1. Authority & Philosophy**
-This document defines the shared standards for code quality, style, and architectural clarity across the AiAnvil project. It exists to ensure that all contributors — human or AI — work from a common foundation of structure, intent, and maintainability.
+This document defines the shared standards for code quality, style, and architectural clarity across the project. It exists to ensure that all contributors — human or AI — work from a common foundation of structure, intent, and maintainability.
 
 ---
 
@@ -104,34 +105,33 @@ This standard applies to all exported `interface`, `type`, and `enum` declaratio
 - **5.1 Mandatory JSDoc Comments:** Every exported `interface`, `type`, or `enum` definition **MUST** be immediately preceded by a comprehensive JSDoc-style comment block (`/** ... */`).
 - **5.2 Canonical Identifier:** The JSDoc block **MUST** include a single, combined identifier for the type and its file path using the `@id` tag. This facilitates programmatic scraping and unambiguous referencing.
   - **Format:** `@id <full/path/to/file.ts>#<TypeName>`
-  - **Example:** `@id src/features/game/logic/turn/types.ts#TurnContextPayload`
+  - **Example:** `@id src/features/commerce/logic/checkout/types.ts#CheckoutPayload`
 - **5.3 Purpose Description:** The JSDoc block **MUST** include a concise `@description` tag. This tag **MUST** describe the type's overall purpose, its architectural significance, and its high-level invariants.
   - **Content Focus:** _How_ this type serves the system, _what problem it solves_, and _what core architectural ideas it embodies_.
 - **5.4 Field-Level Detail:**
   - For `interface` and object `type` aliases, **every single property** **MUST** have an individual JSDoc comment explaining its purpose, expected values, and any critical relationships or constraints with other fields.
   - For `enum` members, **every single member** **MUST** have an individual JSDoc comment explaining its meaning and use case.
 
-- **Example (for `TurnContextPayload`):**
+- **Example:**
   ```typescript
   /**
-   * @id src/features/game/logic/turn/types.ts#TurnContextPayload
+   * @id src/features/commerce/logic/checkout/types.ts#CheckoutPayload
    * @description
-   * The AI-agnostic, replayable "what" of a turn. This interface aggregates all
-   * game state and user preferences required by AI helpers, ensuring they operate
-   * with full historical context without needing to perform I/O or access
-   * sensitive data. It embodies the principle of Decoupled Context.
+   * An immutable, replayable record of a checkout attempt. This interface aggregates all
+   * cart state and user preferences required by the payment processor, ensuring it can operate
+   * without needing to perform I/O or access sensitive data. It embodies the principle of Decoupled Context.
    */
-  export interface TurnContextPayload {
+  export interface CheckoutPayload {
     /**
-     * The full, immutable game shell from which the current game session was initialized.
-     * Provides the AI's core persona, custom instructions, and world definitions.
+     * The full, immutable cart object from which the session was initialized.
+     * Provides the item list, quantities, and applied discounts.
      */
-    shell: Shell;
+    cart: Cart;
     /**
-     * The current sequential number of the turn being processed (e.g., 1 for the first action).
-     * Used for correlating events and for AI's temporal awareness.
+     * The unique identifier for the transaction attempt.
+     * Used for correlating events and for idempotency checks.
      */
-    turnNumber: number;
+    transactionId: string;
     // ... other fields with their own detailed comments ...
   }
   ```
@@ -209,30 +209,30 @@ Selectors must return primitives or shallow-comparable slices. Selecting entire 
 
 ```typescript
 // This will be rejected.
-const { title, tags } = useShellStore();
-const entireStore = useShellStore();
+const { title, tags } = useProductStore();
+const entireStore = useProductStore();
 ```
 
 **CORRECT AND MANDATORY PATTERN:**
 
 ```typescript
 // This is the only acceptable pattern.
-const title = useShellStore((state) => state.title);
-const tags = useShellStore((state) => state.tags);
+const title = useProductStore((state) => state.title);
+const tags = useProductStore((state) => state.tags);
 ```
 
 #### **8.4 Modernity & Due Diligence**
 
-The AI's tendency to suggest outdated patterns must be actively counteracted.
+The tendency to suggest outdated patterns must be actively counteracted.
 
 - **Dependency Verification:** New third-party dependencies **MUST** be verified as modern, maintained, and secure.
 - **Modern Pattern Preference:** **MUST** prefer modern, idiomatic APIs and patterns (e.g., `async/await`, functional array methods) over legacy approaches.
 
 ---
 
-### **9. The Testing Standard: Pragmatic Contract-Driven Testing (P-CDT)**
+### **9. The Testing Standard**
 
-Covered separately in The Definitive AiAnvil Testing Standard.
+Covered separately in the project's official Testing Standard documentation.
 
 ---
 
@@ -252,13 +252,13 @@ To be considered "just enough," logging **MUST** be focused on the following cat
   - **Example:** `logger.info('Application hydrated and ready.')`
 
 - **2. Significant User-Initiated Actions:** The start of any major, multi-step user workflow.
-  - **Example:** `logger.info('New game session started', { shellId })`, `logger.info('User initiated shell publication', { shellId })`
+  - **Example:** `logger.info('User checkout started', { cartId })`, `logger.info('User initiated content publication', { contentId })`
 
 - **3. Key System-Driven Events:** Important background processes or state transitions that are not directly initiated by the user in a single click.
-  - **Example:** `logger.info('Cross-device session sync started')`, `logger.warn('AI connection failed over to fallback model')`
+  - **Example:** `logger.info('Cross-device session sync started')`, `logger.warn('Payment gateway failed over to fallback provider')`
 
 - **4. Handled Errors and Unexpected States:** Any `catch` block that handles an error gracefully **MUST** log the error to provide a record of the failure.
-  - **Example:** `logger.error('Failed to parse AI response stream', { error, turnNumber })`
+  - **Example:** `logger.error('Failed to parse API response', { error, transactionId })`
 
 #### **10.3 What We MUST NOT Log (The Noise)**
 
@@ -270,7 +270,7 @@ To maintain a high signal-to-noise ratio, logging in the following contexts is *
 
 - **3. Personally Identifiable Information (PII) or Secrets:** Logging user emails, API keys, or any other sensitive data is forbidden.
 
-- **4. Simple Function Entry/Exit:** So-called "trace" or "printf debugging" logs (e.g., `logger.log('entering processTurn function')`) **MUST** be removed before a commit. Use your interactive debugger for this, not the permanent log.
+- **4. Simple Function Entry/Exit:** So-called "trace" or "printf debugging" logs (e.g., `logger.log('entering processPayment function')`) **MUST** be removed before a commit. Use your interactive debugger for this, not the permanent log.
 
 #### **10.4 The Mandate of Structured Context**
 
@@ -280,17 +280,17 @@ To ensure logs are machine-parsable and maximally useful, every log entry **MUST
 
 ```typescript
 // This will be rejected. It is not structured.
-logger.log('Player ID: ' + playerId + ' is taking turn number: ' + turnNumber);
+logger.log('User ID: ' + userId + ' is processing transaction: ' + transactionId);
 ```
 
 **CORRECT AND MANDATORY PATTERN:**
 
 ```typescript
 // The message is a static string. The dynamic data is in the context object.
-logger.info('Player turn initiated', {
+logger.info('User transaction initiated', {
   sessionId: 'xyz-123',
-  turnNumber: 42,
-  playerId: 'abc-789',
+  transactionId: 42,
+  userId: 'abc-789',
 });
 ```
 
@@ -339,7 +339,7 @@ The `packages/` directory is the highest level of architectural organization. Ea
 
 - `packages/client/`: Contains the entire front-end React application, with its source code residing in `src/`.
 - `packages/shared/`: **(The Core Domain & Platform-Agnostic Logic)**
-  - **Purpose:** To define the canonical, application-wide **domain models** (`Chip.ts`, `Shell.ts`) and foundational, **platform-Agnostic** utilities that have no knowledge of React, the DOM, or Cloud Functions.
+  - **Purpose:** To define the canonical, application-wide **domain models** (`User.ts`, `Product.ts`) and foundational, **platform-Agnostic** utilities that have no knowledge of React, the DOM, or Cloud Functions.
   - **Rule:** Code in this package **MUST NOT** have any dependencies on any other package in the monorepo.
 - `packages/functions/`: Contains all server-side logic deployed as Cloud Functions.
   - **Structure:** Source code for this package **MUST** reside in `src/`. The TypeScript compiler will output the final JavaScript to the `lib/` directory, which is the deployment target.
@@ -353,12 +353,12 @@ The client application's source code (`packages/client/src/`) is organized into 
   - **Rule:** A feature **MAY** depend on `src/shared` and `src/lib`, but **MUST NOT** depend on another feature directly.
 - **Tier 2: `src/shared/` (The Horizontals - The Client UI Kit):** The single, authoritative location for all reusable code shared across multiple features _within the client_. This includes "dumb" UI components, shared hooks, and client-specific utilities.
   - **Rule:** Code in this directory **MUST NOT** have any knowledge of a specific feature.
-- **Tier 3: `src/lib/` (The Foundation):** For foundational, client-specific, non-UI, cross-cutting concerns (e.g., Firebase setup, AI clients).
+- **Tier 3: `src/lib/` (The Foundation):** For foundational, client-specific, non-UI, cross-cutting concerns (e.g., Firebase setup, API clients).
   - **Rule:** Code in this directory **MUST NOT** depend on `src/features` or `src/shared`.
 
 #### **13.5 File Naming**
 
-File names are determined by the nature of their exports. The "namespace-dot" pattern (e.g., `actions.turn.dispatch.ts`) is forbidden.
+File names are determined by the nature of their exports. The "namespace-dot" pattern (e.g., `actions.user.login.ts`) is forbidden.
 
 #### **13.6 The `index.ts` Rules**
 
@@ -373,38 +373,39 @@ File names are determined by the nature of their exports. The "namespace-dot" pa
 #### **13.9 Variable Naming**
 
 - **Local Variables & Properties:** **MUST** use **`camelCase`**.
-  - Collections **MUST** be plural nouns (e.g., `const players = ...`).
+  - Collections **MUST** be plural nouns (e.g., `const users = ...`).
 - **Boolean Flags:** **MUST** be prefixed with `is`, `has`, or `should`.
-  - **Examples:** `isGameOver`, `hasNextTurn`, `shouldRender`
+  - **Examples:** `isComplete`, `hasPermission`, `shouldRedirect`
 - **Module-Level Constants:** Truly universal, hardcoded constants (e.g., max retries, default names) exported from a file **MUST** use **`UPPER_SNAKE_CASE`**.
   - **Example:** `export const DEFAULT_TIMEOUT = 5000;`
 
 ---
 
-### **Part C: Deprecation & Refactoring Guidance**
+### **Part C: Architectural Guidance & Anti-Patterns**
 
-#### **13.10 Deprecated Directories**
+#### **13.10 The "Catch-All Directory" Anti-Pattern**
 
-The following directories are considered **deprecated**. New code **MUST NOT** be added to them. They are targets for gradual refactoring.
+A common architectural smell is the creation of generic, catch-all directories like `common`, `utils`, or `misc` within a structured layer like `features/`. Such directories inevitably violate the principle of separation of concerns, becoming a tangled dumping ground for unrelated code. This breaks encapsulation and makes dependencies difficult to track.
 
-- `packages/client/src/features/common`: Its contents **MUST** be refactored into `packages/client/src/shared/`.
-- `packages/client/src/shared/types/`: Its contents **MUST** be co-located with the features or shared components they describe.
+**Guideline:**
 
-#### **13.11 Type Co-location Strategy**
+*   Code that is truly shared across multiple features **MUST** be placed in the designated horizontal shared layer (e.g., `packages/client/src/shared/`). It **MUST NOT** be placed in a generic `common` directory within the vertical feature layer.
 
-All new types **MUST** be co-located with the code they describe:
+#### **13.11 The "Centralized Types" Anti-Pattern**
 
-1.  **Domain Models:** `packages/shared/src/domain`
-2.  **Feature-Specific Types:** Within the feature's directory.
-3.  **Shared UI Types:** Within `src/shared/`, next to the component or hook they belong to.
+While historically common, creating a single, monolithic directory for all type definitions (e.g., `src/types/` or `shared/types/`) is a legacy pattern that couples unrelated parts of the codebase. The modern, preferred approach is **type co-location**.
 
-Of course. A summary table is the perfect "cheat sheet" artifact to make the standard easily digestible for the AI. It translates the dense rules into a high-signal, quick-reference format.
+**Guideline:**
 
-Based on the definitive standard we have just created, here is the complete **Project Naming & Architecture Convention Table**.
+All new types **MUST** be co-located with the code they describe to promote modularity and maintainability. The strategy for co-location is as follows:
+
+1.  **Domain Models:** Core, application-wide models belong in the shared domain layer (e.g., `packages/shared/src/domain`).
+2.  **Feature-Specific Types:** Types used only within a single feature **MUST** reside within that feature's directory.
+3.  **Shared Component/Hook Types:** Types for shared UI components or hooks **MUST** live alongside the code they describe within the shared layer (e.g., `src/shared/components/Button/types.ts`).
 
 ---
 
-# **AiAnvil Project: Naming & Architecture Convention Table**
+# **Project: Naming & Architecture Convention Table**
 
 This table is the definitive, quick-reference guide to all naming and structural conventions.
 
@@ -413,9 +414,9 @@ This table is the definitive, quick-reference guide to all naming and structural
 | Artifact                            | Standard Convention  | Notes / Examples                                                                                                                                    |
 | :---------------------------------- | :------------------- | :-------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **Monorepo Packages**               | `kebab-case`         | `packages/client`, `packages/functions`, `packages/shared`                                                                                          |
-| **Directories**                     | `kebab-case`         | `src/features/shell-editor`, `src/shared/ui-components`                                                                                             |
-| **Source Files (Single Export)**    | `PascalCase.ts(x)`   | For files exporting one main class, component, or default function. <br> e.g., `GameStateManager.ts`, `GameScreen.tsx`                              |
-| **Source Files (Multiple Exports)** | `camelCase.ts`       | For files exporting a collection of related functions or symbols. <br> e.g., `stringUtils.ts`, `compositionLogic.ts`                                |
+| **Directories**                     | `kebab-case`         | `src/features/user-profile`, `src/shared/ui-components`                                                                                             |
+| **Source Files (Single Export)**    | `PascalCase.ts(x)`   | For files exporting one main class, component, or default function. <br> e.g., `UserManager.ts`, `UserProfileScreen.tsx`                              |
+| **Source Files (Multiple Exports)** | `camelCase.ts`       | For files exporting a collection of related functions or symbols. <br> e.g., `stringUtils.ts`, `formValidation.ts`                                |
 | **Test Files**                      | `[filename].spec.ts` | The file being tested, plus the `.spec.ts` suffix. <br> e.g., `stringUtils.spec.ts`                                                                 |
 | **Index / Entry Point Files**       | `index.ts(x)`        | **MUST** be used to avoid redundant naming (`Button/index.tsx`) and as the **mandatory** public API for a package (`packages/shared/src/index.ts`). |
 
@@ -423,13 +424,13 @@ This table is the definitive, quick-reference guide to all naming and structural
 
 | Artifact                       | Standard Convention           | Notes / Examples                                                                                                             |
 | :----------------------------- | :---------------------------- | :--------------------------------------------------------------------------------------------------------------------------- |
-| **Classes & Abstract Classes** | `PascalCase`                  | Abstract classes **SHOULD** have an `Abstract` prefix. <br> e.g., `PlayerManager`, `AbstractGameEngine`                      |
-| **Interfaces & Type Aliases**  | `PascalCase`                  | The `I` prefix for interfaces is **forbidden**. <br> e.g., `interface GameConfig`, `type PlayerId`                           |
-| **Enums**                      | `PascalCase` (Singular)       | Enum members **MUST** also use `PascalCase`. <br> e.g., `enum TurnPhase { Processing, Complete }`                            |
-| **Functions & Methods**        | `camelCase` (Verb-first)      | Async functions **SHOULD** have an `Async` suffix if not obvious. <br> e.g., `calculateScore()`, `saveStateAsync()`          |
+| **Classes & Abstract Classes** | `PascalCase`                  | Abstract classes **SHOULD** have an `Abstract` prefix. <br> e.g., `PaymentProcessor`, `AbstractRepository`                      |
+| **Interfaces & Type Aliases**  | `PascalCase`                  | The `I` prefix for interfaces is **forbidden**. <br> e.g., `interface AppConfig`, `type UserId`                           |
+| **Enums**                      | `PascalCase` (Singular)       | Enum members **MUST** also use `PascalCase`. <br> e.g., `enum OrderStatus { Processing, Complete }`                            |
+| **Functions & Methods**        | `camelCase` (Verb-first)      | Async functions **SHOULD** have an `Async` suffix if not obvious. <br> e.g., `calculateTotal()`, `saveDataAsync()`          |
 | **Event Handlers**             | `handle<Event>` / `on<Event>` | `handle` for internal logic; `on` for props passed to components. <br> e.g., `handleButtonClick`, `<Button onClick={...} />` |
-| **Variables & Properties**     | `camelCase`                   | Collections **MUST** be plural. <br> e.g., `currentPlayer`, `const players = []`                                             |
-| **Boolean Flags**              | `is/has/should` prefix        | **MUST** be prefixed to indicate boolean type. <br> e.g., `isGameOver`, `hasNextTurn`, `shouldRender`                        |
+| **Variables & Properties**     | `camelCase`                   | Collections **MUST** be plural. <br> e.g., `currentUser`, `const users = []`                                             |
+| **Boolean Flags**              | `is/has/should` prefix        | **MUST** be prefixed to indicate boolean type. <br> e.g., `isComplete`, `hasPermission`, `shouldRender`                        |
 | **Module-Level Constants**     | `UPPER_SNAKE_CASE`            | For hardcoded, exported constants. <br> e.g., `export const DEFAULT_TIMEOUT = 5000;`                                         |
 
 ### **Part C: Core Architectural Rules**

@@ -18,6 +18,7 @@
  *   -   public async createWorktree(args: CreateWorktreeArgs): Promise<WorktreeSession>
  *   -   public async removeWorktree(sessionId: string): Promise<void>
  *   -   public async runConflictScan(newChangePlan: string[]): Promise<ConflictScanResult>
+ *   -   public getAllSessions(): readonly WorktreeSession[]
  *
  * @contract
  *   assertions:
@@ -207,6 +208,14 @@ export class GitWorktreeManager {
       }
     }
     return { status: 'CLEAR' };
+  }
+
+  /**
+   * Returns a readonly array of all currently active `WorktreeSession` objects.
+   * This provides a safe, read-only view of the internal state for UI components.
+   */
+  public getAllSessions(): readonly WorktreeSession[] {
+    return Array.from(this.sessionMap.values());
   }
 
   private async _persistState(): Promise<void> {

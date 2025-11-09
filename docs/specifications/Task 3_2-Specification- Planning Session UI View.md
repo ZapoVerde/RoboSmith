@@ -85,21 +85,27 @@ export interface WorkflowViewState {
       export let state: WorkflowViewState;
     </script>
     ```
-
-*   **Detailed Behavioral Logic (The Algorithm):**
+* **Detailed Behavioral Logic (The Algorithm):**
     1.  The component receives the `WorkflowViewState` object as its `state` prop, triggering a re-render.
     2.  **Status Ticker Rendering:** It iterates through the `state.allWorkflowsStatus` array to render the read-only "lozenge" for each workflow at the top of the panel. The currently active workflow is highlighted.
     3.  **Workflow Graph Rendering:**
-        a.  The component uses a rendering library (e.g., Mermaid.js) to generate an SVG flowchart from the `state.graph.blocks` and `state.graph.transitions` data.
-        b.  The `signal` from each transition is used as the label for the corresponding arrow.
+        a.
+            The component uses a rendering library (e.g., Mermaid.js) to generate an SVG flowchart from the `state.graph.blocks` and `state.graph.transitions` data.
+        b.
+            The `signal` from each transition is used as the label for the corresponding arrow.
     4.  **Live State Visualization:**
-        a.  After rendering, the component iterates through the `state.statuses` map. For each `blockId`, it finds the corresponding element in the SVG and applies a CSS class (e.g., `status-complete`, `status-active`) to change its border color and icon.
-        b.  If `state.lastTransition` is present, it finds the corresponding arrow element and applies a brief "glow" animation to visualize the "lit path."
+        a.
+            After rendering, the component iterates through the `state.statuses` map. For each `blockId`, it finds the corresponding element in the SVG and applies a CSS class (e.g., `status-complete`, `status-active`) to change its border color and icon.
+        b.  If `state.lastTransition` is present, it finds the corresponding arrow element and applies a brief "glow" animation to visualize the "lit path".
     5.  **Interactivity:**
-        a.  The component attaches a click event listener to each block element in the SVG graph.
-        b.  When a user clicks a block, the handler function:
-            i.   Updates a local state variable, `selectedBlockId`, with the ID of the clicked block. This will visually highlight the block in the UI.
-            ii.  Dispatches a custom `blockSelected` event to the rest of the application, with a payload containing the `selectedBlockId` and the relevant data from `state.executionLog`. This allows the Chatbox and Context Inspector panels to filter their content accordingly.
+        a.
+            The component attaches a click event listener to each block element in the SVG graph.
+        b.
+            When a user clicks a block, the handler function:
+                i.
+                    Updates a local state variable, `selectedBlockId`, with the ID of the clicked block. This will visually highlight the block in the UI.
+                ii.
+                    Dispatches a custom `blockSelected` event to the rest of the application, with a payload containing the `selectedBlockId` and the relevant data from `state.executionLog`. This allows the **Intervention Panel** to filter its content accordingly.
 
 *   **Mandatory Testing Criteria:**
     *   **Graph Rendering:** A component test must verify that given a `WorkflowViewState` with 2 blocks and 1 transition, the rendered output contains the correct number of nodes and an arrow with the correct `signal` label.

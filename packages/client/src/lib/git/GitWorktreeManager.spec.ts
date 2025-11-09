@@ -1,9 +1,11 @@
 /**
  * @file packages/client/src/lib/git/GitWorktreeManager.spec.ts
+ * @stamp S-20251107T155600Z-C-UPDATED
  * @test-target packages/client/src/lib/git/GitWorktreeManager.ts
  * @description Verifies the orchestration logic of the GitWorktreeManager in
  * isolation by providing a mocked IGitAdapter. It tests the self-healing
- * reconciliation loop, state management, command delegation, and the new conflict scan logic.
+ * reconciliation loop, state management, command delegation, conflict scan logic,
+ * and the new `getAllSessions` method.
  * @criticality The test target is CRITICAL.
  * @testing-layer Unit
  */
@@ -273,6 +275,27 @@ describe('GitWorktreeManager', () => {
         expect(result.conflictingSessionId).toBe(MOCK_SESSION_A.sessionId);
         expect(result.conflictingFiles).toEqual(['shared.ts']);
       }
+    });
+  });
+
+  describe('getAllSessions', () => {
+    it('should return an empty array when no sessions are active', () => {
+      const result = manager.getAllSessions();
+      expect(result).toEqual([]);
+    });
+
+    it('should return a readonly array of all currently active sessions', () => {
+      // Arrange
+      manager['sessionMap'].set(MOCK_SESSION_A.sessionId, MOCK_SESSION_A);
+      manager['sessionMap'].set(MOCK_SESSION_B.sessionId, MOCK_SESSION_B);
+
+      // Act
+      const result = manager.getAllSessions();
+
+      // Assert
+      expect(result.length).toBe(2);
+      expect(result).toContainEqual(MOCK_SESSION_A);
+      expect(result).toContainEqual(MOCK_SESSION_B);
     });
   });
 });

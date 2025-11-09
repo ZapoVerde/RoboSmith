@@ -38,47 +38,46 @@ export type FinalDecisionMessage =
 ## 3. Component Specification
 
 ### Component: IntegrationPanel (Svelte)
-*   **Architectural Role:** UI Component (View)
-*   **Core Responsibilities:**
-    *   Display the details of the completed task (branch name, changed files).
-    *   Present the primary validation tool: the `[🚀 Open Terminal in Worktree]` button.
-    *   Render the three final, mutually exclusive action buttons: `[Accept]`, `[Reject]`, and `[Hold]`.
-    *   Emit the correct `FinalDecisionMessage` to the Extension Host when a user clicks any of the action buttons.
-    *   Require confirmation for destructive actions (Reject).
+* **Architectural Role:** UI Component (View)
+* **Core Responsibilities:**
+    * Display the details of the completed task (branch name, changed files).
+    * Present the primary validation tool: the `[🚀 Open Terminal in Worktree]` button.
+    * Render the three final, mutually exclusive action buttons: `[Accept]`, `[Reject]`, and `[Hold]`.
+    * Emit the correct `FinalDecisionMessage` to the Extension Host when a user clicks any of the action buttons.
+    * Require confirmation for destructive actions (Reject).
 
-*   **Public API (Svelte Component Signature):**
+* **Public API (Svelte Component Signature):**
     ```svelte
-    <!-- IntegrationPanel.svelte -->
     <script lang="ts">
       import type { TaskReadyForIntegrationMessage } from './types';
-
-      /**
+    /**
        * The details of the completed task, passed in as a prop.
-       */
+    [cite_start][cite: 2009-2010] */
       export let task: TaskReadyForIntegrationMessage['payload'];
     </script>
 
-    <!-- The component will render the UI and its three final action buttons -->
     ```
 
-*   **Detailed Behavioral Logic (The Algorithm):**
+* **Detailed Behavioral Logic (The Algorithm):**
     1.  **Appearance:** The panel is rendered when the backend sends a `taskReadyForIntegration` message. The message `payload` is passed as the `task` prop.
-    2.  **Information Display:** The `task.branchName` and a list of `task.changedFiles` are displayed in a read-only format.
-    3.  **User Validation:** The most prominent action is the `[🚀 Open Terminal in Worktree]` button. Clicking this sends an `openTerminalInWorktree` message to the backend, which opens a terminal scoped to the correct worktree `cwd`, allowing the user to run tests or start a dev server.
+    2.  [cite_start]**Information Display:** The `task.branchName` and a list of `task.changedFiles` are displayed in a read-only format [cite: 2012-2013].
+    3.  **User Validation:** The most prominent action is the `[🚀 Open Terminal in Worktree]` button. [cite_start]Clicking this sends an `openTerminalInWorktree` message to the backend, which opens a terminal scoped to the correct worktree `cwd`, allowing the user to run tests or start a dev server [cite: 2014-2015].
     4.  **Final Decision Buttons:** Three distinct buttons are presented to the user:
-        a.  **`[✅ Accept and Merge Branch]`:** The primary "happy path" button. Clicking it sends an `acceptAndMerge` message to the backend.
-            *   **Backend Logic:** Receives the message, executes the Git commands to commit, merge the branch into `main`, and then runs the full cleanup (`git worktree remove`, `git branch -d`). Finally, it updates its state and switches the user's workspace back to the "Lobby" view.
-        b.  **`[❌ Reject and Discard Branch]`:** The destructive "abort" button.
-            *   **UI Logic:** Clicking this button first triggers a `vscode.window.showInformationMessage` modal asking for confirmation.
-            *   **Backend Logic:** If confirmed, the UI sends a `rejectAndDiscard` message. The backend executes `git worktree remove --force` and `git branch -d` to completely destroy the worktree and branch, then switches the user back to the "Lobby".
+        a.
+**`[✅ Accept and Merge Branch]`:** The primary "happy path" button. Clicking it sends an `acceptAndMerge` message to the backend.
+            * **Backend Logic:** Receives the message, executes the Git commands to commit, merge the branch into `main`, and then runs the full cleanup (`git worktree remove`, `git branch -d`). Finally, it updates its state and switches the user's workspace back to the "Lobby" view.
+        b.
+**`[❌ Reject and Discard Branch]`:** The destructive "abort" button.
+            * **UI Logic:** Clicking this button first triggers a `vscode.window.showInformationMessage` modal asking for confirmation.
+            * **Backend Logic:** If confirmed, the UI sends a `rejectAndDiscard` message. [cite_start]The backend executes `git worktree remove --force` and `git branch -d` to completely destroy the worktree and branch, then switches the user back to the "Lobby" [cite: 2021-2022].
         c.  **`[⏸️ Finish & Hold Branch]`:** The "save for later" option.
-            *   **Backend Logic:** Clicking this sends a `finishAndHold` message. The backend updates the workflow's status to `Held` in its persistent state. It performs **no Git operations**, leaving the worktree and branch intact. It then switches the user's workspace back to the "Lobby". The held task will remain visible in the Status Bar Navigator.
+            * **Backend Logic:** Clicking this sends a `finishAndHold` message. The backend serializes the Orchestrator's complete state to `.robo/session.json`, commits this file to the branch, and then cleans up the local worktree. The session can be 're-inflated' later. See `docs/architecture/Durable_Session_Persistence.md` for details. It then switches the user's workspace back to the "Lobby" and the held task will remain visible in the Status Bar Navigator.
 
-*   **Mandatory Testing Criteria:**
-    *   **Rendering:** A component test must verify that given a `task` prop, the `branchName` is displayed and all three final action buttons (`Accept`, `Reject`, `Hold`) are rendered.
-    *   **Event Emission:** Tests must verify that clicking each of the three buttons dispatches an event with the correct `command` and `sessionId` payload.
-    *   **Confirmation Modal:** A test must verify that clicking the `[Reject]` button triggers a call to a mocked `showInformationMessage` function and *only* dispatches its event if the confirmation is positive.
-    *   **Backend Logic (Integration Tests):** Higher-level tests must verify that:
-        *   Receiving an `acceptAndMerge` message results in the correct sequence of Git `merge` and `worktree remove` commands.
-        *   Receiving a `rejectAndDiscard` message results in a `worktree remove --force` command.
-        *   Receiving a `finishAndHold` message results in a state update **without** calling any Git cleanup commands.
+* **Mandatory Testing Criteria:**
+    * **Rendering:** A component test must verify that given a `task` prop, the `branchName` is displayed and all three final action buttons (`Accept`, `Reject`, `Hold`) are rendered.
+    * **Event Emission:** Tests must verify that clicking each of the three buttons dispatches an event with the correct `command` and `sessionId` payload.
+    * **Confirmation Modal:** A test must verify that clicking the `[Reject]` button triggers a call to a mocked `showInformationMessage` function and *only* dispatches its event if the confirmation is positive.
+    * **Backend Logic (Integration Tests):** Higher-level tests must verify that:
+        * Receiving an `acceptAndMerge` message results in the correct sequence of Git `merge` and `worktree remove` commands.
+        * Receiving a `rejectAndDiscard` message results in a `worktree remove --force` command.
+        * Receiving a `finishAndHold` message results in a Git `commit` (to save the state) and a `worktree remove` (to clean up the local environment).

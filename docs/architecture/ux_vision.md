@@ -52,13 +52,11 @@ The Mission Control Panel is the heart of the experience. It is not a static lis
 *   **The Diversion:** A test fails. The user sees the `Run Tests` block turn red `[❌]`. The `SIGNAL:FAILURE` arrow glows, and the "lit path" visibly diverts to the `Troubleshoot Code` block, which begins to pulsate. The system is attempting to self-correct, and the user has a perfect, real-time view of this "troubleshooting loop."
 
 ### 3.4. The "Glass Box": On-Demand, Surgical Transparency
-The user is curious about the failure. They click the red `Run Tests` block in the diagram.
+The user is curious about the failure[cite: 1556]. They click the red `Run Tests` block in the diagram[cite: 1557]. This single action populates the unified **"Intervention Panel"** in the bottom panel area[cite: 1558].
 
-This action populates the **Inspector Panels** in the bottom panel area.
-*   The **"Context Inspector"** instantly shows the "little icons" representing the exact recipe of context that was fed into the test runner: the source file, the test file, and the system rules. Clicking an icon provides a pop-up or peek view of that content.
-*   The **"RoboSmith Chat"** panel instantly filters the entire history to show only the conversation relevant to this block: the input command and the full, raw `stderr` output from the test failure.
-
-The "black box" of automation is gone. The user has a complete, interactive "glass box" to understand any step of the process.
+* The "black box" of automation is gone. The user has a complete, interactive "glass box" to understand any step of the process[cite: 1562].
+* This single panel displays the full context for the selected block: the "little icons" representing the input context *and* the scrollable chat history (`ExecutionPayload`) showing the step's inputs and outputs [cite: 1559-1561].
+* If the block is *halted*, this same panel also displays the interactive controls, merging observability and intervention into one view.
 
 ### 3.5. The Final Decision: The Integration Panel
 The workflow completes. The Mission Control Panel is replaced by the clean, focused **Integration Panel**. The automation is over; it is time for the director's final decision. The user is presented with a clear choice, embodied by four buttons:

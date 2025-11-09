@@ -63,14 +63,20 @@ export interface Transition {
 
 /**
  * @id packages/client/src/shared/types.ts#BlockDefinition
- * @description The manifest definition for a single, atomic, executable unit of work (a Block). It is a pure, stateless entity that contains no logic itself, only references to the components of execution.
+ * @description The manifest definition for a single, atomic, executable unit of work (a Block).
+ * It is a pure, stateless entity that contains no logic itself, only references to the components of execution.
  */
 export interface BlockDefinition {
-  /** A string identifier referencing the Worker (AI or internal) that will execute the Block's logic. */
+  /** A string identifier referencing the Worker (AI or internal) that will execute the Block's logic.
+   */
   worker: string;
-  /** An ordered array of merge instructions used by the Orchestrator to assemble the `ExecutionPayload` for this Block's execution. */
+  /** If present, the Orchestrator will validate the AI's output against this schema. */
+  validationSchema?: string; // <--- THIS IS THE NEW PROPERTY
+  /** An ordered array of merge instructions used by the Orchestrator to assemble the `ExecutionPayload` for this Block's execution.
+   */
   payload_merge_strategy: string[];
-  /** The complete table of rules that governs all possible state transitions out of this Block. */
+  /** The complete table of rules that governs all possible state transitions out of this Block.
+   */
   transitions: Transition[];
 }
 
@@ -261,3 +267,5 @@ export type ExtensionMessage =
       payload: { apiKeys: ApiKey[] };
     }
   | TaskReadyForIntegrationMessage;
+
+  

@@ -2,7 +2,11 @@
  * @file packages/client/src/lib/workflow/Orchestrator.spec.ts
  * @stamp S-20251107T130200Z-C-REFACTOR-FINALIZE
  * @test-target packages/client/src/lib/workflow/Orchestrator.ts
- * @description A comprehensive, consolidated integration test suite for the main Orchestrator class. It verifies all integrated behaviors, including state transitions (JUMP, CALL, RETURN), context boundary enforcement, payload merging, default fallbacks, and error handling.
+ * @description
+ * A comprehensive, consolidated integration test suite for the main Orchestrator class.
+ * It verifies all integrated behaviors, including state transitions (JUMP, CALL, RETURN),
+ * context boundary enforcement, payload merging, default fallbacks, error handling,
+ * and the correct emission of the `WorkflowViewState` object and completion signal.
  * @criticality The test target is CRITICAL, as it is the central execution engine of the application.
  * @testing-layer Integration
  */
@@ -24,9 +28,10 @@ vi.mock('vscode', () => ({
   
   // --- Imports ---
   import { describe, it, expect, vi, beforeEach } from 'vitest';
+  import type { Mock } from 'vitest';
   import { Orchestrator } from './Orchestrator';
   import { logger } from '../logging/logger';
-  import type { ContextSegment, WorkflowManifest } from '../../shared/types';
+  import type { ContextSegment, WorkflowManifest, WorkflowViewState } from '../../shared/types';
   import type { ContextPartitionerService } from '../context/ContextPartitionerService';
   import type { ApiPoolManager } from '../ai/ApiPoolManager';
   
@@ -176,12 +181,15 @@ vi.mock('vscode', () => ({
   
   describe('Orchestrator', () => {
     let mockApiManager: ApiPoolManager;
+    let mockOnStateUpdate: Mock;
+    let mockOnCompletion: Mock;
     const mockContextService = {} as ContextPartitionerService;
-    const mockOnStateUpdate = vi.fn();
     const MOCK_WORKTREE_PATH = '/mock/worktree/path-123';
   
     beforeEach(() => {
       vi.clearAllMocks();
+      mockOnStateUpdate = vi.fn();
+      mockOnCompletion = vi.fn();
       mockApiManager = {
         execute: vi.fn().mockResolvedValue({
           signal: 'SIGNAL:SUCCESS',
@@ -192,7 +200,7 @@ vi.mock('vscode', () => ({
   
     describe('Initialization and Error Handling', () => {
       it('should throw an error if the startNodeId is not in the manifest', async () => {
-        const orchestrator = new Orchestrator(MOCK_TRANSITION_MANIFEST, mockContextService, mockApiManager, mockOnStateUpdate);
+        const orchestrator = new Orchestrator(MOCK_TRANSITION_MANIFEST, mockContextService, mockApiManager, mockOnStateUpdate, mockOnCompletion);
         await expect(orchestrator.executeNode('Node:DoesNotExist', MOCK_WORKTREE_PATH)).rejects.toThrow(
           'Start node "Node:DoesNotExist" not found in manifest.'
         );
@@ -209,7 +217,7 @@ vi.mock('vscode', () => ({
             },
           },
         };
-        const orchestrator = new Orchestrator(malformedManifest, mockContextService, mockApiManager, mockOnStateUpdate);
+        const orchestrator = new Orchestrator(malformedManifest, mockContextService, mockApiManager, mockOnStateUpdate, mockOnCompletion);
         await expect(orchestrator.executeNode('NodeMalformed', MOCK_WORKTREE_PATH)).rejects.toThrow(
           'Invalid blockId format: "NodeMalformedStart". Must be "NodeId__BlockName".'
         );
@@ -230,7 +238,7 @@ vi.mock('vscode', () => ({
             },
           },
         };
-        const orchestrator = new Orchestrator(invalidManifest, mockContextService, mockApiManager, mockOnStateUpdate);
+        const orchestrator = new Orchestrator(invalidManifest, mockContextService, mockApiManager, mockOnStateUpdate, mockOnCompletion);
         await expect(orchestrator.executeNode('NodeInvalidJump', MOCK_WORKTREE_PATH)).rejects.toThrow(
           'Block "DoesNotExist" not found in node "NodeInvalidJump".'
         );
@@ -239,7 +247,7 @@ vi.mock('vscode', () => ({
   
     describe('Worktree Path Propagation', () => {
       it('should include the worktreePath in the WorkOrder for every block execution', async () => {
-        const orchestrator = new Orchestrator(MOCK_TRANSITION_MANIFEST, mockContextService, mockApiManager, mockOnStateUpdate);
+        const orchestrator = new Orchestrator(MOCK_TRANSITION_MANIFEST, mockContextService, mockApiManager, mockOnStateUpdate, mockOnCompletion);
         await orchestrator.executeNode('NodeJump', MOCK_WORKTREE_PATH);
   
         expect(mockApiManager.execute).toHaveBeenCalledTimes(2);
@@ -256,48 +264,62 @@ vi.mock('vscode', () => ({
       it('should halt and propagate the error if a worker execution fails', async () => {
         const workerError = new Error('Worker API Failed');
         vi.mocked(mockApiManager.execute).mockRejectedValue(workerError);
-        const orchestrator = new Orchestrator(MOCK_TRANSITION_MANIFEST, mockContextService, mockApiManager, mockOnStateUpdate);
+        const orchestrator = new Orchestrator(MOCK_TRANSITION_MANIFEST, mockContextService, mockApiManager, mockOnStateUpdate, mockOnCompletion);
         await expect(orchestrator.executeNode('NodeJump', MOCK_WORKTREE_PATH)).rejects.toThrow(workerError);
         expect(mockApiManager.execute).toHaveBeenCalledOnce();
         expect(mockOnStateUpdate).toHaveBeenCalledOnce();
-        expect(mockOnStateUpdate).toHaveBeenCalledWith(expect.objectContaining({ currentBlockId: 'NodeJump__Start' }));
+        expect(mockOnStateUpdate).toHaveBeenCalledWith(
+            expect.objectContaining({
+                statuses: expect.objectContaining({ 'NodeJump__Start': 'active' }),
+            })
+        );
       });
     });
   
     describe('JUMP Action', () => {
       it('should correctly transition to the next block within the same node', async () => {
-        const orchestrator = new Orchestrator(MOCK_TRANSITION_MANIFEST, mockContextService, mockApiManager, mockOnStateUpdate);
+        const orchestrator = new Orchestrator(MOCK_TRANSITION_MANIFEST, mockContextService, mockApiManager, mockOnStateUpdate, mockOnCompletion);
         await orchestrator.executeNode('NodeJump', MOCK_WORKTREE_PATH);
   
         const executedWorkers = vi.mocked(mockApiManager.execute).mock.calls.map(call => call[0].worker);
         expect(executedWorkers).toEqual(['Worker:JumpStart', 'Worker:JumpEnd']);
       });
   
-      it('should publish state updates for each executed block', async () => {
-        const orchestrator = new Orchestrator(MOCK_TRANSITION_MANIFEST, mockContextService, mockApiManager, mockOnStateUpdate);
+      it('should publish state updates for each executed block in WorkflowViewState format', async () => {
+        const orchestrator = new Orchestrator(MOCK_TRANSITION_MANIFEST, mockContextService, mockApiManager, mockOnStateUpdate, mockOnCompletion);
         await orchestrator.executeNode('NodeJump', MOCK_WORKTREE_PATH);
-  
+    
         expect(mockOnStateUpdate).toHaveBeenCalledTimes(3);
-        expect(mockOnStateUpdate).toHaveBeenCalledWith(expect.objectContaining({
-          currentNodeId: 'NodeJump',
-          currentBlockId: 'NodeJump__Start',
-          isHalted: false,
-        }));
-        expect(mockOnStateUpdate).toHaveBeenCalledWith(expect.objectContaining({
-          currentNodeId: 'NodeJump',
-          currentBlockId: 'NodeJump__End',
-          isHalted: false,
-        }));
-        expect(mockOnStateUpdate).toHaveBeenCalledWith(expect.objectContaining({
-          currentNodeId: '',
-          currentBlockId: null,
-        }));
+    
+        // Check the first state update (Start block is active)
+        const firstCallPayload = mockOnStateUpdate.mock.calls[0][0] as WorkflowViewState;
+        expect(firstCallPayload).toHaveProperty('graph');
+        expect(firstCallPayload).toHaveProperty('statuses');
+        expect(firstCallPayload).toHaveProperty('executionLog');
+        expect(firstCallPayload).toHaveProperty('allWorkflowsStatus');
+        expect(firstCallPayload.statuses['NodeJump__Start']).toBe('active');
+        expect(firstCallPayload.statuses['NodeJump__End']).toBe('pending');
+    
+        // Check the second state update (End block is active)
+        const secondCallPayload = mockOnStateUpdate.mock.calls[1][0] as WorkflowViewState;
+        expect(secondCallPayload.statuses['NodeJump__Start']).toBe('complete');
+        expect(secondCallPayload.statuses['NodeJump__End']).toBe('active');
+        expect(secondCallPayload.lastTransition).toEqual({
+            fromBlock: 'NodeJump__Start',
+            toBlock: 'NodeJump__End',
+            signal: 'SIGNAL:SUCCESS',
+        });
+    
+        // Check the final state update (termination)
+        const finalCallPayload = mockOnStateUpdate.mock.calls[2][0] as WorkflowViewState;
+        expect(finalCallPayload.statuses['NodeJump__End']).toBe('complete');
+        expect(finalCallPayload.lastTransition).toBeNull();
       });
     });
   
     describe('CALL and RETURN Actions', () => {
       it('should correctly execute a subroutine and return to the caller', async () => {
-        const orchestrator = new Orchestrator(MOCK_TRANSITION_MANIFEST, mockContextService, mockApiManager, mockOnStateUpdate);
+        const orchestrator = new Orchestrator(MOCK_TRANSITION_MANIFEST, mockContextService, mockApiManager, mockOnStateUpdate, mockOnCompletion);
         await orchestrator.executeNode('NodeParent', MOCK_WORKTREE_PATH);
   
         const executedWorkers = vi.mocked(mockApiManager.execute).mock.calls.map(call => call[0].worker);
@@ -315,7 +337,7 @@ vi.mock('vscode', () => ({
           signal: 'SIGNAL:SOMETHING_UNEXPECTED',
           newPayload: [],
         });
-        const orchestrator = new Orchestrator(MOCK_TRANSITION_MANIFEST, mockContextService, mockApiManager, mockOnStateUpdate);
+        const orchestrator = new Orchestrator(MOCK_TRANSITION_MANIFEST, mockContextService, mockApiManager, mockOnStateUpdate, mockOnCompletion);
         await orchestrator.executeNode('NodeFallback', MOCK_WORKTREE_PATH);
   
         const executedWorkers = vi.mocked(mockApiManager.execute).mock.calls.map(call => call[0].worker);
@@ -325,7 +347,7 @@ vi.mock('vscode', () => ({
   
     describe('Termination Conditions', () => {
       it('should terminate gracefully when a RETURN is called on an empty stack', async () => {
-        const orchestrator = new Orchestrator(MOCK_TRANSITION_MANIFEST, mockContextService, mockApiManager, mockOnStateUpdate);
+        const orchestrator = new Orchestrator(MOCK_TRANSITION_MANIFEST, mockContextService, mockApiManager, mockOnStateUpdate, mockOnCompletion);
         await orchestrator.executeNode('NodeTerminate', MOCK_WORKTREE_PATH);
   
         expect(mockApiManager.execute).toHaveBeenCalledOnce();
@@ -338,12 +360,24 @@ vi.mock('vscode', () => ({
           signal: 'SIGNAL:UNKNOWN',
           newPayload: [],
         });
-        const orchestrator = new Orchestrator(MOCK_TRANSITION_MANIFEST, mockContextService, mockApiManager, mockOnStateUpdate);
+        const orchestrator = new Orchestrator(MOCK_TRANSITION_MANIFEST, mockContextService, mockApiManager, mockOnStateUpdate, mockOnCompletion);
         await orchestrator.executeNode('NodeJump', MOCK_WORKTREE_PATH);
   
         expect(mockApiManager.execute).toHaveBeenCalledOnce();
         expect(logger.debug).toHaveBeenCalledWith('No transition for signal "SIGNAL:UNKNOWN" and no default. Terminating.');
         expect(logger.info).toHaveBeenCalledWith('Workflow execution finished.');
+      });
+
+      it('should call onCompletion when the workflow terminates gracefully', async () => {
+        const orchestrator = new Orchestrator(MOCK_TRANSITION_MANIFEST, mockContextService, mockApiManager, mockOnStateUpdate, mockOnCompletion);
+        await orchestrator.executeNode('NodeTerminate', MOCK_WORKTREE_PATH);
+    
+        expect(mockOnCompletion).toHaveBeenCalledOnce();
+    
+        // Verify it was called after the final state update
+        const finalStateUpdateCallOrder = mockOnStateUpdate.mock.invocationCallOrder[mockOnStateUpdate.mock.calls.length - 1];
+        const completionCallOrder = mockOnCompletion.mock.invocationCallOrder[0];
+        expect(completionCallOrder).toBeGreaterThan(finalStateUpdateCallOrder);
       });
     });
   
@@ -352,7 +386,8 @@ vi.mock('vscode', () => ({
         MOCK_CONTEXT_MANIFEST,
         mockContextService,
         mockApiManager,
-        mockOnStateUpdate
+        mockOnStateUpdate,
+        mockOnCompletion
       );
       await orchestrator.executeNode('NodeParent', '/mock/worktree');
   
@@ -370,7 +405,8 @@ vi.mock('vscode', () => ({
         MOCK_CONTEXT_MANIFEST,
         mockContextService,
         mockApiManager,
-        mockOnStateUpdate
+        mockOnStateUpdate,
+        mockOnCompletion
       );
       await orchestrator.executeNode('NodeParent', '/mock/worktree');
   
@@ -396,7 +432,8 @@ vi.mock('vscode', () => ({
         MOCK_CONTEXT_MANIFEST,
         mockContextService,
         mockApiManager,
-        mockOnStateUpdate
+        mockOnStateUpdate,
+        mockOnCompletion
       );
       await orchestrator.executeNode('NodeFallback', '/mock/worktree');
   
@@ -411,7 +448,8 @@ vi.mock('vscode', () => ({
         MOCK_CONTEXT_MANIFEST,
         mockContextService,
         mockApiManager,
-        mockOnStateUpdate
+        mockOnStateUpdate,
+        mockOnCompletion
       );
   await orchestrator.executeNode('NodePayloadMerge', '/mock/worktree');
   

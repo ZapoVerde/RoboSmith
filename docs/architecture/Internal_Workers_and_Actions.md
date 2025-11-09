@@ -59,22 +59,23 @@ This section formally defines the set of atomic commands that control the flow o
     *   It must gracefully handle a scenario where the test command itself cannot be found or fails to start.
 
 ---
-
 ### 3.2 `Internal:FileSystemWriter`
-*   **Architectural Role:** `Utility` (I/O Handler)
-*   **Core Responsibilities:**
-    *   To be the single, authoritative mechanism for writing AI-generated content to disk.
-    *   To operate safely within the boundaries of the current Git Worktree.
-    *   To parse the `ExecutionPayload` to find all designated "write" segments.
-    *   To handle file I/O operations asynchronously and robustly.
-*   **Contract (Input & Output):**
+* **Architectural Role:** `Utility` (I/O Handler)
+* **Core Responsibilities:**
+    * To be the single, authoritative mechanism for writing AI-generated content to disk.
+    * To operate safely within the boundaries of the current Git Worktree.
+    * To parse the `ExecutionPayload` to find all designated "write" segments.
+    * **To run a cleaning heuristic to extract pure, raw code from "chatty" AI output (e.g., \`\`\`typescript ... \`\`\`) before writing, as defined in `docs/architecture/AI_Output_Processing.md`.**
+    * To handle file I/O operations asynchronously and robustly.
+    * **To count the number of files and lines of code written for stats aggregation.**
+* **Contract (Input & Output):**
     ```typescript
     interface FileSystemWriterInput {
       // Expects specific segments in the payload from a preceding AI block.
       execution_payload: Array<{
         type: 'CODE_OUTPUT' | 'DOCUMENTATION_OUTPUT';
-        // Content should be a structured object or string that includes the target path.
-        content: { filePath: string; fileContent: string; };
+        // Content will be the AI's raw, "chatty" output.
+        content: string;
       }>;
       system_metadata: { worktree_path: string; };
     }
@@ -82,24 +83,33 @@ This section formally defines the set of atomic commands that control the flow o
     interface FileSystemWriterOutput {
       signal: 'SIGNAL:SUCCESS' | 'SIGNAL:FAILURE';
       new_payload: ExecutionPayload; // Payload is typically passed through unchanged.
+      /** The stats from this write operation. */
+      stats: {
+        filesWritten: number;
+        linesWritten: number;
+      };
     }
     ```
-*   **Detailed Behavioral Logic (The Algorithm):**
+* **Detailed Behavioral Logic (The Algorithm):**
     1.  The `Internal:FileSystemWriter` is invoked.
-    2.  It retrieves the `worktree_path` from `System Metadata`.
-    3.  It filters the `ExecutionPayload` to find all `ContextSegment` objects with a `type` of `CODE_OUTPUT` or similar.
-    4.  It iterates through these segments, parsing the `content` of each to get the relative `filePath` and the `fileContent`.
-    5.  For each file, it constructs an absolute path by joining `worktree_path` and `filePath`.
-    6.  It performs an asynchronous `writeFile` operation. If any write fails (e.g., due to permissions), it immediately halts the loop.
-    7.  **If all writes succeed:** The Worker returns `{ signal: 'SIGNAL:SUCCESS', ... }`.
-    8.  **If any write fails:** The Worker returns `{ signal: 'SIGNAL:FAILURE', ... }` and should add an `ERROR` segment to the payload with the I/O error details.
-*   **Mandatory Testing Criteria:**
-    *   The worker must correctly construct absolute file paths inside the worktree.
-    *   It must successfully call a mocked file system API with the correct path and content.
-    *   It must emit `SIGNAL:FAILURE` if the mocked file system API throws an error.
-    *   It must handle multiple file-writing segments in a single payload.
-
----
+    2.  It initializes `filesWritten = 0` and `linesWritten = 0`.
+    3.  It retrieves the `worktree_path` from `System Metadata`.
+    4.  It filters the `ExecutionPayload` to find all `ContextSegment` objects with a `type` of `CODE_OUTPUT` or similar.
+    5.  It iterates through these segments. For each segment:
+        a.  It parses the `content` to get the relative `filePath` (which is assumed to be part of the content, or in a metadata field).
+        b.  It runs its **code extraction heuristic** on the `content` to get the `pureCode`. (e.g., looks for markdown fences like \`\`\`typescript ... \`\`\` or \`\`\`javascript ... \`\`\`).
+        c.  It constructs an absolute path by joining `worktree_path` and `filePath`.
+        d.  It performs an asynchronous `writeFile` operation using the `pureCode`. If any write fails, it halts the loop.
+        e.  On each successful write, it increments `filesWritten` and adds the number of lines in `pureCode` to `linesWritten`.
+    6.  **If all writes succeed:** The Worker returns `{ signal: 'SIGNAL:SUCCESS', stats: { filesWritten, linesWritten }, ... }`.
+    7.  **If any write fails:** The Worker returns `{ signal: 'SIGNAL:FAILURE', ... }` and should add an `ERROR` segment to the payload with the I/O error details.
+* **Mandatory Testing Criteria:**
+    * The worker must correctly construct absolute file paths inside the worktree.
+    * **It must successfully extract a code block from within markdown fences.**
+    * **It must successfully extract a code block that is *not* wrapped in fences.**
+    * It must successfully call a mocked file system API with the correct path and the *extracted code content*.
+    * It must emit `SIGNAL:FAILURE` if the mocked file system API throws an error.
+    * **It must return the correct `filesWritten` and `linesWritten` counts in its result.**
 
 ### 3.3 `Internal:UpdateChangePlan`
 *   **Architectural Role:** `Utility` (Session State Mutator)

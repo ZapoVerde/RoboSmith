@@ -10,8 +10,9 @@
 **Goal:** Establish the core, non-UI backend services and prove they can be initialized and operated in a headless environment. This phase focuses on the singleton services that form the application's backbone.
 
 *   **1.1. Implement the `ApiPoolManager`:**
-    *   Build the "failover-driven round-robin" logic for managing multiple API keys.
-    *   Write integration tests to prove the failover mechanism works, fulfilling **V1 Success Criterion 5.4**.
+    * Build the "failover-driven round-robin" logic for managing multiple API keys.
+    * **Implement the per-call logging system to save `AiCallLog` files (with request, response, tokens, and latency) to the `.vision/logs/` directory. This is a prerequisite for the AI Call Inspector.**
+    * Write integration tests to prove the failover mechanism works, fulfilling **V1 Success Criterion 5.4**.
 
 *   **1.2. Implement the `ContextPartitionerService`:**
     *   Create the service wrapper around the pre-compiled `roberto-mcp` binary, including logic to select the correct binary for the host OS and architecture.
@@ -84,8 +85,7 @@
 
 **Goal:** Implement the remaining V1 features, conduct end-to-end testing, and prepare the extension for its first release.
 
-*   **5.1. Implement `Quick Fix Mode`:**
-    *   Register the `roboSmith.quickFix` command and implement the temporary WebviewPanel for chat interaction, applying the final changes as a `vscode.WorkspaceEdit`.
+*   **5.1. --Deprecated--***
 
 *   **5.2. Implement the `AI Call Inspector`:**
     *   Develop the UI to browse, view, and replay logged AI calls from the `.vision/logs/` directory.
