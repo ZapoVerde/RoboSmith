@@ -7,7 +7,11 @@
  * 1. MUST extend the root `tsconfig.base.json` to ensure monorepo-wide consistency.
  * 2. OWNS the responsibility of defining the compilation scope for the `client` package source.
  */
+ 
  {
-    "extends": "../../tsconfig.base.json",
-    "include": ["src/**/*.ts", "vitest.config.ts", "vitest.setup.ts"]
+  "extends": "../../tsconfig.base.json",
+  "include": ["src/**/*.ts"],
+  "compilerOptions": {
+    "types": ["node", "vitest/globals"]
   }
+}

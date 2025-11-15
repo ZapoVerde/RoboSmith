@@ -1,0 +1,25 @@
+/**
+ * @file tsconfig.json
+ * @stamp {"timestamp":"2025-11-09T15:39:29.269Z"}
+ * @architectural-role Configuration
+ * @description The root TypeScript project file for the monorepo. Its primary purpose is to define the full scope of the project for editor tooling and linters like ESLint. It inherits all compiler settings from `tsconfig.base.json`.
+ * @core-principles
+ * 1. IS the definitive entry point for editor-wide type checking and linting.
+ * 2. MUST extend `tsconfig.base.json` to inherit shared compiler options.
+ * 3. OWNS the `include` and `exclude` arrays that define the complete set of files belonging to the project.
+ */
+ {
+  "extends": "./tsconfig.base.json",
+  "include": [
+    "packages/**/*.ts",
+    "webview-ui/src/**/*.ts",
+    "webview-ui/src/**/*.svelte",
+    "vitest.config.mts",
+    "eslint.config.mjs",
+    "svelte.config.mjs"
+  ],
+  "exclude": [
+    "node_modules",
+    "context-slicer"
+  ]
+}

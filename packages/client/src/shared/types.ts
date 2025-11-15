@@ -1,19 +1,18 @@
 /**
  * @file packages/client/src/shared/types.ts
- * @stamp {"timestamp":"2025-11-07T15:12:00.000Z"}
+ * @stamp {"timestamp":"2025-11-09T02:10:00.000Z"}
  * @architectural-role Type Definition
  * @description
  * Defines the complete, bidirectional message contract for the asynchronous event
- * bus and the core data contracts for the Block/Node Workflow Engine. It is the
- * single source of truth for all type-safe communication and workflow manifest
- * structures.
+ * bus and the core data contracts for the Block/Node Workflow Engine. This version
+ * is updated to include the `InterventionMessage` type.
  * @core-principles
  * 1. IS the single source of truth for the client's event bus and workflow contracts.
  * 2. MUST contain only pure TypeScript type/interface definitions.
  * 3. ENFORCES the final, hardened architectural model of Nodes, Blocks, and Payloads.
  *
  * @api-declaration
- *   - Type Aliases for Event Bus: `Message`, `ExtensionMessage`, `FinalDecisionMessage`
+ *   - Type Aliases for Event Bus: `Message`, `ExtensionMessage`, `FinalDecisionMessage`, `InterventionMessage`
  *   - Interfaces for Workflow Engine: `ContextSegment`, `Transition`, `BlockDefinition`, `NodeDefinition`, `WorkflowManifest`, `PlanningState`, `WorkflowViewState`, `TaskReadyForIntegrationMessage`
  *   - Type Alias for Workflow Engine: `ExecutionPayload`
  *
@@ -117,6 +116,28 @@ export type FinalDecisionMessage =
   | { command: 'finishAndHold'; payload: { sessionId: string } };
 
 /**
+ * @id packages/client/src/shared/types.ts#InterventionMessage
+ * @description Represents the set of commands sent from the Intervention Panel to the backend to resume a halted Orchestrator.
+ */
+export type InterventionMessage =
+  | {
+      command: 'resumeWorkflow';
+      payload: {
+        sessionId: string;
+        /** The optional user-provided guidance. */
+        augmentedPrompt?: string;
+      };
+    }
+  | {
+      command: 'retryBlock';
+      payload: {
+        sessionId: string;
+        /** The optional user-provided guidance. */
+        augmentedPrompt?: string;
+      };
+    };
+
+/**
  * A map of all possible commands sent from the UI to the backend, with their
  * corresponding payload types.
  */
@@ -150,12 +171,14 @@ type CommandPayloadMap = {
  * @id packages/client/src/shared/types.ts#Message
  * @description The discriminated union type for all messages sent FROM the WebView TO the Extension Host.
  */
-export type Message = {
-  [K in keyof CommandPayloadMap]: {
-    command: K;
-    payload: CommandPayloadMap[K];
-  };
-}[keyof CommandPayloadMap];
+export type Message =
+  | {
+      [K in keyof CommandPayloadMap]: {
+        command: K;
+        payload: CommandPayloadMap[K];
+      };
+    }[keyof CommandPayloadMap]
+  | InterventionMessage;
 
 
 // --- OUTGOING MESSAGES (Extension Host -> WebView) ---
@@ -267,5 +290,3 @@ export type ExtensionMessage =
       payload: { apiKeys: ApiKey[] };
     }
   | TaskReadyForIntegrationMessage;
-
-  
