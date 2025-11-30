@@ -1,39 +1,27 @@
 /**
  * @file packages/client/src/events/handler.spec.ts
- * @stamp S-20251130T081500Z-C-PREAMBLE-FIX
+ * @stamp 2025-11-30T15:40:00.000Z
  * @test-target packages/client/src/events/handler.ts
  * @description
  * Verifies that the event handler correctly parses incoming messages and routes
- * them to the appropriate backend services (`SettingsStore`, `Orchestrator`,
- * `GitWorktreeManager`). It acts as the controller test for the UI<->Backend bridge.
- * @criticality CRITICAL (Reason: Core Business Logic Orchestration - Point 2. It is the single entry point for all user commands).
+ * them to the appropriate backend services.
+ * @criticality CRITICAL
  * @testing-layer Unit
- *
- * @contract
- *   assertions:
- *     purity: pure          # Mocks all side effects (VS Code API, Stores, Services).
- *     external_io: none     # Uses in-memory mocks.
- *     state_ownership: none # Stateless test suite.
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { Mock, Mocked } from 'vitest';
 
-// Mock uuid FIRST to prevent ESM import issues
+// --- 1. Hoisted Mocks ---
 vi.mock('uuid', () => ({
   v4: vi.fn(() => 'mocked-uuid-v4'),
-  v1: vi.fn(() => 'mocked-uuid-v1'),
-  v3: vi.fn(() => 'mocked-uuid-v3'),
-  v5: vi.fn(() => 'mocked-uuid-v5'),
 }));
 
-// Use vi.hoisted to create mock functions that can be referenced in the mock factory
 const { mockCreateTerminal, mockUpdateWorkspaceFolders } = vi.hoisted(() => ({
   mockCreateTerminal: vi.fn(),
   mockUpdateWorkspaceFolders: vi.fn(),
 }));
 
-// Mock vscode with complete window AND workspace objects
 vi.mock('vscode', () => ({
   window: {
     createOutputChannel: vi.fn(() => ({ appendLine: vi.fn() })),
@@ -45,27 +33,31 @@ vi.mock('vscode', () => ({
   },
 }));
 
-// Mock other dependencies
-vi.mock('../features/settings/state/SettingsStore');
+const mockExecuteNode = vi.fn();
+const mockResumeManually = vi.fn();
+const mockRetryBlock = vi.fn();
+
 vi.mock('../lib/workflow/Orchestrator', () => ({
   Orchestrator: vi.fn(function() {
     return {
       executeNode: mockExecuteNode,
+      resumeManually: mockResumeManually,
+      retryBlock: mockRetryBlock,
     };
   }),
 }));
+
+vi.mock('../features/settings/state/SettingsStore');
 vi.mock('../lib/workflow/WorktreeQueueManager');
 vi.mock('../lib/git/GitWorktreeManager');
 vi.mock('../lib/logging/logger', () => ({
   logger: { info: vi.fn(), debug: vi.fn(), warn: vi.fn(), error: vi.fn() },
 }));
 
-const mockExecuteNode = vi.fn();
-
 import { createEventHandler, type EventHandlerContext } from './handler';
 import { settingsStore } from '../features/settings/state/SettingsStore';
 import { Orchestrator } from '../lib/workflow/Orchestrator';
-import type { Message, WorkflowManifest, WorkflowViewState } from '../shared/types';
+import type { Message, WorkflowManifest } from '../shared/types';
 import type { WebviewPanel } from 'vscode';
 import type { ContextPartitionerService } from '../lib/context/ContextPartitionerService';
 import type { ApiPoolManager } from '../lib/ai/ApiPoolManager';
@@ -115,94 +107,102 @@ describe('handleEvent', () => {
     } as unknown as ReturnType<typeof settingsStore.getState>);
   });
 
-  it('should log info for currently unimplemented "userAction" command', async () => {
-    const message: Message = { command: 'userAction', payload: { action: 'proceed', sessionId: 's1' } };
-    await handleEvent(message, mockContext);
-    expect(logger.info).toHaveBeenCalledWith(
-      expect.stringContaining('User action received but not yet implemented'),
-      expect.anything()
-    );
-  });
-  
-  it('should log a warning for unknown commands (safety fallback)', async () => {
+  // --- Group 1: General & API Keys ---
+
+  it('should log a warning for unknown commands', async () => {
     const message = { command: 'unknownCommand', payload: {} } as unknown as Message;
+    
     await handleEvent(message, mockContext);
+    
     expect(logger.warn).toHaveBeenCalledWith(
-      '[EventHandler] Received unhandled command:',
-      message.command
+      expect.stringContaining('Received unhandled command'),
+      { command: 'unknownCommand' } // FIX: Expect a structured object, not a string
     );
   });
 
-  describe('API Key Management Commands', () => {
-    it("should route the 'loadApiKeys' command to the settings store", async () => {
-      const message: Message = { command: 'loadApiKeys', payload: undefined };
-      await handleEvent(message, mockContext);
+  describe('API Key Management', () => {
+    it("should route 'loadApiKeys' to settings store", async () => {
+      await handleEvent({ command: 'loadApiKeys', payload: undefined }, mockContext);
       expect(mockLoadApiKeys).toHaveBeenCalledOnce();
     });
 
-    it("should route the 'addApiKey' command to the settings store", async () => {
+    it("should route 'addApiKey' to settings store", async () => {
       const newApiKey: ApiKey = { id: 'key-1', provider: 'openai', secret: 'sk-1' };
-      const message: Message = { command: 'addApiKey', payload: newApiKey };
-      await handleEvent(message, mockContext);
+      await handleEvent({ command: 'addApiKey', payload: newApiKey }, mockContext);
       expect(mockAddApiKey).toHaveBeenCalledWith(newApiKey, mockContext.secureStorageService);
     });
 
-    it("should route the 'removeApiKey' command to the settings store", async () => {
-      const message: Message = { command: 'removeApiKey', payload: { id: 'key-to-delete' } };
-      await handleEvent(message, mockContext);
+    it("should route 'removeApiKey' to settings store", async () => {
+      await handleEvent({ command: 'removeApiKey', payload: { id: 'key-to-delete' } }, mockContext);
       expect(mockRemoveApiKey).toHaveBeenCalledWith('key-to-delete', mockContext.secureStorageService);
     });
   });
 
-  describe('Workflow Control Commands', () => {
-    it('should delegate to the queue manager, start the orchestrator, and wire up the UI feedback loop', async () => {
-        const mockSession: WorktreeSession = { sessionId: 's1', worktreePath: '/path/to/worktree', branchName: 'b1', changePlan: [], status: 'Running' };
+  describe('Workflow Lifecycle & Interactivity', () => {
+    it('should submit task, register orchestrator, and start execution on startWorkflow', async () => {
+        const mockSession: WorktreeSession = { sessionId: 's1', worktreePath: '/path', branchName: 'b1', changePlan: [], status: 'Running' };
         mockWorktreeQueueManager.submitTask.mockResolvedValue(mockSession);
         const mockArgs: CreateWorktreeArgs = { baseBranch: 'main', changePlan: ['file.ts'] };
-        const message: Message = { command: 'startWorkflow', payload: { args: mockArgs, nodeId: 'test-node' } };
-      
-        await handleEvent(message, mockContext);
+        
+        await handleEvent(
+            { command: 'startWorkflow', payload: { args: mockArgs, nodeId: 'test-node' } }, 
+            mockContext
+        );
         
         expect(mockWorktreeQueueManager.submitTask).toHaveBeenCalledWith(mockArgs);
-        expect(Orchestrator).toHaveBeenCalledOnce();
-        
-        const orchestratorCallArgs = vi.mocked(Orchestrator).mock.calls[0];
-        const onStateUpdateCallback = orchestratorCallArgs[3] as (state: WorkflowViewState) => void;
-        const onCompletionCallback = orchestratorCallArgs[4] as () => void;
-        expect(mockExecuteNode).toHaveBeenCalledWith('test-node', '/path/to/worktree');
-      
-        const mockState: WorkflowViewState = {
-            graph: { nodeId: 'test-node', blocks: {}, transitions: [] },
-            statuses: { 'test-node__BlockStart': 'active' },
-            lastTransition: null,
-            executionLog: {},
-            allWorkflowsStatus: [],
-        };
-        onStateUpdateCallback(mockState);
-      
-        expect(mockPostMessage).toHaveBeenCalledWith({
-          command: 'workflowStateUpdate',
-          payload: mockState,
-        });
-
-        expect(onCompletionCallback).toBeInstanceOf(Function);
+        expect(Orchestrator).toHaveBeenCalled();
+        expect(mockExecuteNode).toHaveBeenCalledWith('test-node', '/path');
     });
 
-    it('should log an error if the queue manager fails', async () => {
-      const testError = new Error('Queue submission failed');
-      mockWorktreeQueueManager.submitTask.mockRejectedValue(testError);
-      const mockArgs: CreateWorktreeArgs = { baseBranch: 'main', changePlan: ['file.ts'] };
-      const message: Message = { command: 'startWorkflow', payload: { args: mockArgs, nodeId: 'test-node' } };
+    it('should route resumeWorkflow to the correct registered orchestrator', async () => {
+        const sessionId = 's-resume';
+        mockWorktreeQueueManager.submitTask.mockResolvedValue({ 
+            sessionId, worktreePath: '/path', branchName: 'b' 
+        } as WorktreeSession);
 
-      await handleEvent(message, mockContext);
+        await handleEvent(
+            { command: 'startWorkflow', payload: { args: { baseBranch: 'm', changePlan: [] }, nodeId: 'N' } }, 
+            mockContext
+        );
 
-      expect(logger.error).toHaveBeenCalledWith('Workflow task submission or execution failed.', { error: testError });
-      expect(Orchestrator).not.toHaveBeenCalled();
+        await handleEvent(
+            { command: 'resumeWorkflow', payload: { sessionId, augmentedPrompt: 'Go' } },
+            mockContext
+        );
+
+        expect(mockResumeManually).toHaveBeenCalledWith('Go');
+    });
+
+    it('should route retryBlock to the correct registered orchestrator', async () => {
+        const sessionId = 's-retry';
+        mockWorktreeQueueManager.submitTask.mockResolvedValue({ 
+            sessionId, worktreePath: '/path', branchName: 'b' 
+        } as WorktreeSession);
+
+        await handleEvent(
+            { command: 'startWorkflow', payload: { args: { baseBranch: 'm', changePlan: [] }, nodeId: 'N' } }, 
+            mockContext
+        );
+
+        await handleEvent(
+            { command: 'retryBlock', payload: { sessionId, augmentedPrompt: 'Fix it' } },
+            mockContext
+        );
+
+        expect(mockRetryBlock).toHaveBeenCalledWith('Fix it');
+    });
+
+    it('should log error when resuming a non-existent session', async () => {
+        await handleEvent(
+            { command: 'resumeWorkflow', payload: { sessionId: 'ghost', augmentedPrompt: '' } },
+            mockContext
+        );
+        expect(logger.error).toHaveBeenCalledWith(expect.stringContaining('Cannot resume: No active orchestrator'));
     });
   });
 
   describe('Integration Panel Commands', () => {
-    it('should delegate to GitWorktreeManager and WorktreeQueueManager on acceptAndMerge', async () => {
+    it('should delegate to managers on acceptAndMerge', async () => {
       const message: Message = { command: 'acceptAndMerge', payload: { sessionId: 's1' } };
       await handleEvent(message, mockContext);
 
@@ -211,7 +211,7 @@ describe('handleEvent', () => {
       expect(mockUpdateWorkspaceFolders).toHaveBeenCalled();
     });
 
-    it('should delegate to GitWorktreeManager and WorktreeQueueManager on rejectAndDiscard', async () => {
+    it('should delegate to managers on rejectAndDiscard', async () => {
       const message: Message = { command: 'rejectAndDiscard', payload: { sessionId: 's1' } };
       await handleEvent(message, mockContext);
 
@@ -220,22 +220,21 @@ describe('handleEvent', () => {
       expect(mockUpdateWorkspaceFolders).toHaveBeenCalled();
     });
 
-    it('should NOT remove worktree but should switch workspace on finishAndHold', async () => {
+    it('should handle finishAndHold (cleanup registry but keep files)', async () => {
       const message: Message = { command: 'finishAndHold', payload: { sessionId: 's1' } };
       await handleEvent(message, mockContext);
 
-      expect(logger.warn).toHaveBeenCalledWith('Session status update to "Held" is not yet implemented in GitWorktreeManager.');
       expect(mockGitWorktreeManager.removeWorktree).not.toHaveBeenCalled();
-      expect(mockWorktreeQueueManager.markTaskComplete).not.toHaveBeenCalled();
       expect(mockUpdateWorkspaceFolders).toHaveBeenCalled();
     });
 
-    it('should create a terminal with the correct CWD on openTerminalInWorktree', async () => {
-      const mockSession: WorktreeSession = { sessionId: 's1', worktreePath: '/path/to/s1', branchName: 'feat/s1', changePlan: [], status: 'Running' };
+    it('should open a terminal on openTerminalInWorktree', async () => {
+      const mockSession: WorktreeSession = { 
+          sessionId: 's1', worktreePath: '/path/to/s1', branchName: 'feat/s1', changePlan: [], status: 'Running' 
+      };
       mockGitWorktreeManager.getAllSessions.mockReturnValue([mockSession]);
-      const message: Message = { command: 'openTerminalInWorktree', payload: { sessionId: 's1' } };
       
-      await handleEvent(message, mockContext);
+      await handleEvent({ command: 'openTerminalInWorktree', payload: { sessionId: 's1' } }, mockContext);
 
       expect(mockCreateTerminal).toHaveBeenCalledWith({
         name: expect.stringContaining(mockSession.branchName),

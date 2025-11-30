@@ -1,24 +1,22 @@
 /**
  * @file packages/client/src/events/handler.ts
- * @stamp S-20251130T083000Z-C-FIX-EXHAUSTIVE-CHECK
+ * @stamp 2025-11-30T15:40:00.000Z
  * @architectural-role Orchestrator
- * @description A factory for creating an event handler. It routes commands from
- * the UI to the appropriate backend services, including new commands for UI
- * orchestration and final workflow disposition.
+ * @description A factory for creating an event handler. Routes commands from
+ * the UI to backend services and manages the Registry of active Orchestrators.
  * @core-principles
  * 1. IS the single entry point for all commands from the UI layer.
- * 2. DELEGATES all business logic to the appropriate service or store.
- * 3. ENFORCES testability by design through state encapsulation.
+ * 2. OWNS the registry of active Orchestrator instances (Session -> Instance).
+ * 3. DELEGATES business logic to services/orchestrators.
  *
  * @api-declaration
- *   - export interface EventHandlerContext
  *   - export function createEventHandler()
  *
  * @contract
  *   assertions:
- *     purity: mutates          # Mutates application state via delegated services.
- *     external_io: vscode      # Interacts with VS Code APIs (Terminal, Workspace, Webview).
- *     state_ownership: none    # Stateless factory; state resides in injected services.
+ *     purity: mutates
+ *     external_io: vscode
+ *     state_ownership: ['orchestratorRegistry']
  */
 
 import * as vscode from 'vscode';
@@ -43,28 +41,18 @@ export interface EventHandlerContext {
   gitWorktreeManager: GitWorktreeManager;
 }
 
-/**
- * Switches the VS Code workspace to show only the main project root folder.
- */
 function switchToLobbyView(): void {
   const workspaceFolders = vscode.workspace.workspaceFolders;
   if (workspaceFolders && workspaceFolders.length > 0) {
-    // Assuming the first folder is the main project root.
     const mainProjectRootUri = workspaceFolders[0].uri;
     vscode.workspace.updateWorkspaceFolders(0, workspaceFolders.length, { uri: mainProjectRootUri });
     logger.info('Switched workspace view back to the main project (Lobby).');
-  } else {
-    logger.warn('Could not switch to Lobby view: No workspace folders found.');
   }
 }
 
-/**
- * Creates and returns a new event handler function.
- */
 export function createEventHandler() {
-  // TODO: In a future iteration, we need a registry here to track active Orchestrator instances
-  // by sessionId so we can call resume/retry on them.
-  // const orchestrators = new Map<string, Orchestrator>();
+  // THE REGISTRY: Tracks active orchestrator instances by sessionId
+  const orchestrators = new Map<string, Orchestrator>();
 
   return async function handleEvent(message: Message, context: EventHandlerContext): Promise<void> {
     const { command, payload } = message;
@@ -83,8 +71,13 @@ export function createEventHandler() {
         break;
 
       case 'startWorkflow': {
-        const { args, nodeId } = payload as { args: CreateWorktreeArgs; nodeId: string };
-        logger.info(`Submitting workflow task for node: ${nodeId}`);
+        const { args, nodeId, isManualApprovalMode } = payload as { 
+            args: CreateWorktreeArgs; 
+            nodeId: string;
+            isManualApprovalMode?: boolean;
+        };
+        
+        logger.info(`Submitting workflow task for node: ${nodeId} (Stepper: ${!!isManualApprovalMode})`);
 
         try {
           const session = await context.worktreeQueueManager.submitTask(args);
@@ -93,9 +86,20 @@ export function createEventHandler() {
           const onStateUpdate = (state: WorkflowViewState) => {
             context.panel.webview.postMessage({ command: 'workflowStateUpdate', payload: state });
           };
+
           const onCompletion = () => {
             logger.info(`Workflow for session ${session.sessionId} has completed.`);
-            // Future: Trigger integration panel display here if not handled by state updates
+            orchestrators.delete(session.sessionId); // Cleanup registry
+            
+            context.panel.webview.postMessage({
+                command: 'taskReadyForIntegration',
+                payload: {
+                    sessionId: session.sessionId,
+                    branchName: session.branchName,
+                    commitMessage: 'Automated changes completed.',
+                    changedFiles: session.changePlan
+                }
+            });
           };
 
           const orchestrator = new Orchestrator(
@@ -103,21 +107,47 @@ export function createEventHandler() {
             context.contextService,
             context.apiManager,
             onStateUpdate,
-            onCompletion
+            onCompletion,
+            isManualApprovalMode ?? false
           );
 
-          // Future: Store orchestrator in registry: orchestrators.set(session.sessionId, orchestrator);
+          // REGISTER THE INSTANCE
+          orchestrators.set(session.sessionId, orchestrator);
 
+          // Start execution (fire and forget from handler perspective)
           void orchestrator.executeNode(nodeId, session.worktreePath);
+
         } catch (error) {
           logger.error('Workflow task submission or execution failed.', { error });
         }
         break;
       }
 
-      case 'blockSelected':
-        logger.info(`Block selected: ${payload.blockId}. Inspector panel updates not yet implemented.`);
+      case 'resumeWorkflow': {
+        const { sessionId, augmentedPrompt } = payload;
+        const orchestrator = orchestrators.get(sessionId);
+        
+        if (orchestrator) {
+            logger.info(`Resuming workflow for session ${sessionId}`);
+            await orchestrator.resumeManually(augmentedPrompt);
+        } else {
+            logger.error(`Cannot resume: No active orchestrator found for session ${sessionId}`);
+        }
         break;
+      }
+
+      case 'retryBlock': {
+        const { sessionId, augmentedPrompt } = payload;
+        const orchestrator = orchestrators.get(sessionId);
+        
+        if (orchestrator) {
+            logger.info(`Retrying block for session ${sessionId}`);
+            await orchestrator.retryBlock(augmentedPrompt);
+        } else {
+            logger.error(`Cannot retry: No active orchestrator found for session ${sessionId}`);
+        }
+        break;
+      }
 
       case 'openTerminalInWorktree': {
         const { sessionId } = payload;
@@ -127,9 +157,6 @@ export function createEventHandler() {
             name: `RoboSmith: ${session.branchName}`,
             cwd: session.worktreePath,
           });
-          logger.info(`Opened terminal in worktree: ${session.worktreePath}`);
-        } else {
-          logger.error(`Could not open terminal: Session ${sessionId} not found.`);
         }
         break;
       }
@@ -137,42 +164,32 @@ export function createEventHandler() {
       case 'acceptAndMerge':
       case 'rejectAndDiscard': {
         const { sessionId } = payload;
-        logger.info(`Processing '${command}' for session ${sessionId}.`);
         await context.gitWorktreeManager.removeWorktree(sessionId);
         context.worktreeQueueManager.markTaskComplete(sessionId);
+        orchestrators.delete(sessionId);
         switchToLobbyView();
         break;
       }
       
       case 'finishAndHold': {
         const { sessionId } = payload;
-        logger.info(`Processing 'finishAndHold' for session ${sessionId}.`);
-        logger.warn('Session status update to "Held" is not yet implemented in GitWorktreeManager.');
+        orchestrators.delete(sessionId);
         switchToLobbyView();
         break;
       }
 
-      case 'resumeWorkflow':
-      case 'retryBlock': {
-        const { sessionId, augmentedPrompt } = payload;
-        logger.info(`Received '${command}' for session ${sessionId}. Augmented Prompt: ${augmentedPrompt ?? 'None'}`);
-        // TODO: Retrieve the active Orchestrator instance for this session and call 
-        // .resumeManually() or a similar method. This requires the Orchestrator registry 
-        // mentioned above.
-        logger.warn(`Orchestrator control for '${command}' is not yet implemented.`);
-        break;
-      }
-
       case 'userAction': {
-        // This case is added back to satisfy the exhaustiveness check for the legacy CommandPayloadMap
         logger.info('User action received but not yet implemented.', { payload });
         break;
       }
 
+      case 'blockSelected': {
+        break;
+      }
+
       default: {
-        // This ensures the switch is exhaustive
-        const exhaustiveCheck: never = command;
-        logger.warn(`[EventHandler] Received unhandled command:`, exhaustiveCheck);
+        // FIX: Pass the command as a structured context object, not a raw string.
+        logger.warn(`[EventHandler] Received unhandled command`, { command: command as unknown as string });
         break;
       }
     }

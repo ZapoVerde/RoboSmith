@@ -1,45 +1,26 @@
 /**
  * @file packages/client/src/features/navigator/StatusBarNavigatorService.ts
- * @stamp S-20251107T184500Z-C-TYPE-FIX-APPLIED
+ * @stamp 2025-11-30T16:00:00.000Z
  * @architectural-role Feature Entry Point
  * @description
- * Encapsulates all logic for the Status Bar Navigator UI feature. It is responsible for
- * creating the status bar item, handling user clicks, rendering the QuickPick menu,
- * and orchestrating workspace switches. It is designed for complete testability
- * by injecting all external dependencies, including VS Code API abstractions.
+ * Encapsulates logic for the Status Bar Navigator. Now integrated with the
+ * WorktreeQueueManager to enforce safety and the ExtensionContext to persist
+ * "Pending Start" state across window reloads.
  * @core-principles
- * 1. OWNS the complete lifecycle and logic for the Status Bar Navigator feature.
- * 2. DELEGATES all Git operations to the injected GitWorktreeManager.
- * 3. MUST be fully isolated from other features and testable via dependency injection.
- *
- * @api-declaration
- *   - export class StatusBarNavigatorService
- *
- * @contract
- *   assertions:
- *     purity: "mutates"       # Manages its own state (e.g., the statusBarItem).
- *     external_io: "vscode"   # Interacts with the VS Code UI and workspace APIs.
- *     state_ownership: "['statusBarItem']"
+ * 1. OWNS the UI for navigation and new task creation.
+ * 2. DELEGATES task creation to the WorktreeQueueManager (not the raw Manager).
+ * 3. PERSISTS intent to `globalState` before triggering a workspace switch.
  */
 
 import * as vscode from 'vscode';
 import type { GitWorktreeManager, WorktreeSession } from '../../lib/git/GitWorktreeManager';
+import type { WorktreeQueueManager } from '../../lib/workflow/WorktreeQueueManager';
 import { logger } from '../../lib/logging/logger';
 
-/**
- * @id packages/client/src/features/navigator/StatusBarNavigatorService.ts#NavigatorItem
- * @description A specialized QuickPickItem that includes a unique `id` for identifying the user's selection.
- */
 interface NavigatorItem extends vscode.QuickPickItem {
   id: string; // 'main', 'createNew', or a sessionId
 }
 
-/**
- * @id packages/client/src/features/navigator/StatusBarNavigatorService.ts#INavigatorDependencies
- * @description Defines an explicit contract for the VS Code APIs this service depends on.
- * This is the key to making the service highly testable, as a mock implementation
- * of this interface can be injected during tests.
- */
 export interface INavigatorDependencies {
   window: {
     createStatusBarItem(alignment?: vscode.StatusBarAlignment, priority?: number): vscode.StatusBarItem;
@@ -47,8 +28,6 @@ export interface INavigatorDependencies {
     showInputBox(options?: vscode.InputBoxOptions): Thenable<string | undefined>;
   };
   workspace: {
-    // FIX: Changed the return type from `Thenable<boolean>` to `boolean` to match
-    // the actual signature of the `vscode.workspace.updateWorkspaceFolders` API.
     updateWorkspaceFolders(start: number, deleteCount: number | undefined | null, ...workspaceFoldersToAdd: { uri: vscode.Uri; name?: string }[]): boolean;
   };
   commands: {
@@ -56,26 +35,25 @@ export interface INavigatorDependencies {
   };
 }
 
+export interface PendingWorkflowState {
+  sessionId: string;
+  nodeId: string;
+  isManualApprovalMode: boolean;
+}
+
 export class StatusBarNavigatorService {
   private statusBarItem!: vscode.StatusBarItem;
   private mainProjectRoot!: vscode.WorkspaceFolder;
+  public static readonly PENDING_WORKFLOW_KEY = 'roboSmith.pendingWorkflow';
 
-  /**
-   * Constructs the service with its dependencies.
-   * @param gitWorktreeManager The service for managing Git worktrees.
-   * @param deps An object providing abstracted VS Code API functions for testability.
-   * @param subscriptions A reference to the extension's subscriptions array for disposable management.
-   */
   public constructor(
     private readonly gitWorktreeManager: GitWorktreeManager,
+    private readonly worktreeQueueManager: WorktreeQueueManager,
+    private readonly context: vscode.ExtensionContext,
     private readonly deps: INavigatorDependencies,
     private readonly subscriptions: vscode.Disposable[]
   ) {}
 
-  /**
-   * Initializes the feature: creates the status bar item and registers the command.
-   * This is the single entry point called from the extension's `activate` function.
-   */
   public initialize(mainProjectRoot: vscode.WorkspaceFolder): void {
     this.mainProjectRoot = mainProjectRoot;
 
@@ -89,12 +67,10 @@ export class StatusBarNavigatorService {
       this.statusBarItem,
       this.deps.commands.registerCommand('roboSmith.showNavigator', () => this.showNavigator())
     );
+    
+    this.updateStatusText();
   }
 
-  /**
-   * The core command handler. It builds and displays the QuickPick menu, then
-   * acts on the user's selection.
-   */
   private async showNavigator(): Promise<void> {
     const sessions = this.gitWorktreeManager.getAllSessions();
     const items = this.buildQuickPickItems(sessions);
@@ -102,14 +78,11 @@ export class StatusBarNavigatorService {
       placeHolder: 'Switch RoboSmith context or create a new workflow...',
     });
 
-    if (!selected) {
-      logger.debug('Navigator QuickPick was cancelled by the user.');
-      return;
-    }
+    if (!selected) return;
 
     switch (selected.id) {
       case 'main':
-        await this.switchWorkspace(this.mainProjectRoot.uri, '🤖 RoboSmith: My Project (main)');
+        await this.switchWorkspace(this.mainProjectRoot.uri);
         break;
       case 'createNew':
         await this.createNewWorkflow();
@@ -117,54 +90,58 @@ export class StatusBarNavigatorService {
       default: {
         const session = sessions.find(s => s.sessionId === selected.id);
         if (session) {
-          await this.switchWorkspace(
-            vscode.Uri.file(session.worktreePath),
-            `🤖 RoboSmith: ${session.branchName}`
-          );
+          await this.switchWorkspace(vscode.Uri.file(session.worktreePath));
         }
         break;
       }
     }
   }
 
-  /**
-   * Orchestrates the creation of a new workflow session.
-   */
   private async createNewWorkflow(): Promise<void> {
+    // 1. Prompt for Task Name
     const taskName = await this.deps.window.showInputBox({
-      prompt: 'Enter a short name for the new workflow',
+      prompt: 'Enter a name for the new workflow',
       validateInput: text => (text.trim().length > 0 ? null : 'Name cannot be empty.'),
     });
+    if (!taskName) return;
 
-    if (!taskName) {
-      logger.debug('Create new workflow was cancelled at the input box.');
-      return;
-    }
+    // 2. Prompt for Mode
+    // FIX: Explicitly type the items as NavigatorItem[] to ensure 'id' is known.
+    const modes: NavigatorItem[] = [
+      { label: 'Autonomous Mode', description: 'Run continuously (Default)', picked: true, id: 'auto' },
+      { label: 'Stepper Mode', description: 'Pause for approval before every step', id: 'manual' }
+    ];
+
+    const modeSelection = await this.deps.window.showQuickPick(modes, { placeHolder: 'Select execution mode' });
+    if (!modeSelection) return;
+
+    const isManualApprovalMode = modeSelection.id === 'manual';
 
     try {
-      // For V1, the change plan and base branch are hardcoded, but this is where
-      // more complex logic would go in the future.
-      const newSession = await this.gitWorktreeManager.createWorktree({
+      // 3. Submit to Queue
+      const session = await this.worktreeQueueManager.submitTask({
         baseBranch: 'main',
-        changePlan: [], // Initially empty for a new task
+        changePlan: [], 
       });
 
-      await this.switchWorkspace(
-        vscode.Uri.file(newSession.worktreePath),
-        `🤖 RoboSmith: ${newSession.branchName}`
-      );
+      // 4. Persist "Ignition" State
+      const pendingState: PendingWorkflowState = {
+        sessionId: session.sessionId,
+        nodeId: 'Implement',
+        isManualApprovalMode
+      };
+      await this.context.globalState.update(StatusBarNavigatorService.PENDING_WORKFLOW_KEY, pendingState);
+
+      logger.info(`Workflow queued and ready. Switching to worktree: ${session.sessionId}`);
+
+      // 5. Switch Workspace
+      await this.switchWorkspace(vscode.Uri.file(session.worktreePath));
+
     } catch (error) {
-      logger.error('Failed to create new worktree.', { error });
-      // This is where you would show an error message to the user, also through the dependency interface.
-      // e.g., this.deps.window.showErrorMessage(...)
+      logger.error('Failed to create or queue new workflow.', { error });
     }
   }
 
-  /**
-   * Builds the list of items to display in the QuickPick menu.
-   * @param sessions The list of currently active worktree sessions.
-   * @returns A formatted array of NavigatorItem objects.
-   */
   private buildQuickPickItems(sessions: readonly WorktreeSession[]): NavigatorItem[] {
     const mainProjectItem: NavigatorItem = {
       label: 'My Project',
@@ -173,7 +150,7 @@ export class StatusBarNavigatorService {
     };
 
     const workflowItems: NavigatorItem[] = (sessions || []).map(session => {
-      let icon = '⏸️'; // Held
+      let icon = '⏸️';
       if (session.status === 'Running') icon = '▶️';
       if (session.status === 'Queued') icon = '⏳';
 
@@ -195,20 +172,33 @@ export class StatusBarNavigatorService {
     ];
   }
 
-  /**
-   * Atomically switches the visible workspace folder and updates the status bar text.
-   * @param targetUri The URI of the folder to make visible.
-   * @param newStatusText The new text to display in the status bar.
-   */
-  private async switchWorkspace(targetUri: vscode.Uri, newStatusText: string): Promise<void> {
+  private async switchWorkspace(targetUri: vscode.Uri): Promise<void> {
     try {
       const folders = vscode.workspace.workspaceFolders;
-      // The await here is not strictly necessary for a boolean return, but it does no harm and keeps the async signature.
       await this.deps.workspace.updateWorkspaceFolders(0, folders ? folders.length : 0, { uri: targetUri });
-      this.statusBarItem.text = newStatusText;
-      logger.info(`Switched workspace view to: ${targetUri.fsPath}`);
+      this.updateStatusText(); // Optimistic update
     } catch (error) {
       logger.error('Failed to switch workspace.', { error, targetUri: targetUri.fsPath });
+    }
+  }
+
+  private updateStatusText(): void {
+    const currentRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+    if (!currentRoot) return;
+
+    if (currentRoot === this.mainProjectRoot.uri.fsPath) {
+        this.statusBarItem.text = '🤖 RoboSmith: My Project (main)';
+        return;
+    }
+
+    const sessions = this.gitWorktreeManager.getAllSessions();
+    const activeSession = sessions.find(s => s.worktreePath === currentRoot);
+    
+    if (activeSession) {
+        this.statusBarItem.text = `🤖 RoboSmith: ${activeSession.branchName}`;
+    } else {
+        // Fallback if we are in a folder but it's not a managed session
+        this.statusBarItem.text = '🤖 RoboSmith: (Unknown Context)';
     }
   }
 }

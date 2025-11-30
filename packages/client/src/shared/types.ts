@@ -1,11 +1,11 @@
 /**
  * @file packages/client/src/shared/types.ts
- * @stamp {"timestamp":"2025-11-09T02:10:00.000Z"}
+ * @stamp 2025-11-30T18:00:00.000Z
  * @architectural-role Type Definition
  * @description
  * Defines the complete, bidirectional message contract for the asynchronous event
  * bus and the core data contracts for the Block/Node Workflow Engine. This version
- * is updated to include the `InterventionMessage` type.
+ * includes the contracts for the AI Call Inspector.
  * @core-principles
  * 1. IS the single source of truth for the client's event bus and workflow contracts.
  * 2. MUST contain only pure TypeScript type/interface definitions.
@@ -13,7 +13,7 @@
  *
  * @api-declaration
  *   - Type Aliases for Event Bus: `Message`, `ExtensionMessage`, `FinalDecisionMessage`, `InterventionMessage`
- *   - Interfaces for Workflow Engine: `ContextSegment`, `Transition`, `BlockDefinition`, `NodeDefinition`, `WorkflowManifest`, `PlanningState`, `WorkflowViewState`, `TaskReadyForIntegrationMessage`
+ *   - Interfaces for Workflow Engine: `ContextSegment`, `Transition`, `BlockDefinition`, `NodeDefinition`, `WorkflowManifest`, `WorkflowViewState`, `AiCallLog`
  *   - Type Alias for Workflow Engine: `ExecutionPayload`
  *
  * @contract
@@ -66,16 +66,13 @@ export interface Transition {
  * It is a pure, stateless entity that contains no logic itself, only references to the components of execution.
  */
 export interface BlockDefinition {
-  /** A string identifier referencing the Worker (AI or internal) that will execute the Block's logic.
-   */
+  /** A string identifier referencing the Worker (AI or internal) that will execute the Block's logic. */
   worker: string;
   /** If present, the Orchestrator will validate the AI's output against this schema. */
-  validationSchema?: string; // <--- THIS IS THE NEW PROPERTY
-  /** An ordered array of merge instructions used by the Orchestrator to assemble the `ExecutionPayload` for this Block's execution.
-   */
+  validationSchema?: string;
+  /** An ordered array of merge instructions used by the Orchestrator to assemble the `ExecutionPayload` for this Block's execution. */
   payload_merge_strategy: string[];
-  /** The complete table of rules that governs all possible state transitions out of this Block.
-   */
+  /** The complete table of rules that governs all possible state transitions out of this Block. */
   transitions: Transition[];
 }
 
@@ -101,7 +98,51 @@ export interface NodeDefinition {
 export type WorkflowManifest = Record<string, NodeDefinition>;
 
 
-// --- II. EVENT BUS MESSAGE CONTRACTS ---
+// --- II. OBSERVABILITY & DEBUGGING CONTRACTS ---
+
+/**
+ * @id packages/client/src/shared/types.ts#AiCallLog
+ * @description The structured format for a single AI call log, used for durability (file storage) and the Inspector UI.
+ */
+export interface AiCallLog {
+  /** A unique identifier for this specific call. */
+  callId: string;
+  /** ISO 8601 timestamp of when the call was initiated. */
+  timestamp: string;
+  /** The session/workflow this call was a part of. */
+  sessionId: string;
+  /** The name of the step in the workflow manifest (optional if unknown). */
+  stepName?: string;
+  /** The payload that was sent to the AI provider. */
+  request: {
+    provider: 'openai' | 'google' | 'anthropic';
+    model: string;
+    /** The full prompt, including context, as sent to the API. */
+    prompt: string;
+    /** The sampling temperature used. */
+    temperature?: number;
+    /** The max tokens limit used. */
+    maxTokens?: number;
+  };
+  /** The response received from the AI provider. */
+  response: {
+    /** The raw string content of the AI's reply. */
+    content: string;
+    /** The token usage data reported by the API. */
+    tokensUsed: {
+      input?: number;
+      output?: number;
+      total?: number;
+    };
+    /** The total time for the API call, in milliseconds. */
+    durationMs: number;
+  };
+  /** If the call failed, the error message. */
+  error?: string;
+}
+
+
+// --- III. EVENT BUS MESSAGE CONTRACTS ---
 
 // --- INCOMING MESSAGES (WebView -> Extension Host) ---
 
@@ -151,6 +192,7 @@ type CommandPayloadMap = {
   startWorkflow: {
     args: CreateWorktreeArgs;
     nodeId: string;
+    isManualApprovalMode?: boolean;
   };
   userAction: {
     action: 'proceed' | 'revise' | 'abort';
@@ -165,6 +207,12 @@ type CommandPayloadMap = {
   acceptAndMerge: { sessionId: string };
   rejectAndDiscard: { sessionId: string };
   finishAndHold: { sessionId: string };
+
+  // AI Call Inspector Actions
+  rerunCall: {
+    /** The modified request payload to be sent to the AI. */
+    modifiedRequest: AiCallLog['request'];
+  };
 };
 
 /**
