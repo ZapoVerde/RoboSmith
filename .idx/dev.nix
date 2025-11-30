@@ -5,7 +5,7 @@
 #  * @core-principles
 #  * 1. IS the canonical definition of the project's development toolchain.
 #  * 2. MUST ensure a consistent and reproducible environment for all developers.
-#  * 3. OWNS the management of all system-level dependencies (e.g., Node.js, linters, formatters).
+#  * 3. OWNS the management of all system-level dependencies (e.g., Node.js, linters, formatters, Rust).
 #  */
 
 # To learn more about how to use Nix to configure your environment
@@ -25,6 +25,12 @@
     # This makes the `eslint` and `prettier` commands available in the workspace terminal.
     pkgs.nodePackages.eslint
     pkgs.nodePackages.prettier
+
+    # --- Rust Toolchain (Required for roberto-mcp) ---
+    pkgs.rustc
+    pkgs.cargo
+    # GCC is required for linking the Rust binary during compilation
+    pkgs.gcc
   ];
 
   # Sets environment variables in the workspace

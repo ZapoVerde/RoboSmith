@@ -24,6 +24,8 @@
 
 import * as vscode from 'vscode';
 import * as path from 'path';
+import * as os from 'os'; // For platform detection
+import { RealJsonRpcClient } from './lib/context/RealJsonRpcClient';
 import { logger } from './lib/logging/logger';
 import { RealGitAdapter } from './lib/git/RealGitAdapter';
 import { GitWorktreeManager } from './lib/git/GitWorktreeManager';
@@ -74,12 +76,27 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     const apiPoolManager = ApiPoolManager.getInstance(secureStorageService);
     const workflowService = WorkflowService.getInstance();
     
-    // Placeholder R-MCP Factory
-    const rMcpClientFactory = (_proc: ManagedProcess): JsonRpcClient => ({
-        sendCall: async (_method: string, _params: unknown) => Promise.resolve({}) 
-    });
-    
-    const rMcpServerManager = new R_Mcp_ServerManager(processSpawner, rMcpClientFactory);
+    // Real R-MCP Factory
+    // 1. Resolve Binary Path
+    const binaryPath = path.join(
+      context.extensionPath,
+      'packages',
+      'client',
+      'bin',
+      getBinaryName()
+    );
+
+    // 2. Define Real Client Factory
+    const rMcpClientFactory = (proc: ManagedProcess): JsonRpcClient => {
+      return new RealJsonRpcClient(proc);
+    };
+
+    // 3. Inject Path and Factory
+    const rMcpServerManager = new R_Mcp_ServerManager(
+      processSpawner,
+      rMcpClientFactory,
+      binaryPath // Passing the path we calculated!
+    );
     const contextPartitioner = ContextPartitionerService.getInstance(rMcpServerManager);
 
     const worktreeQueueManager = new WorktreeQueueManager(gitWorktreeManager);
@@ -300,4 +317,13 @@ function getNonce() {
     text += possible.charAt(Math.floor(Math.random() * possible.length));
   }
   return text;
+}
+
+function getBinaryName(): string {
+  const platform = os.platform();
+  // We only support Linux right now since that's what we built
+  if (platform === 'linux') {
+    return 'roberto-mcp-linux-x64';
+  }
+  throw new Error(`Unsupported platform: ${platform}`);
 }

@@ -1,11 +1,11 @@
 /**
  * @file packages/client/src/extension.spec.ts
- * @stamp 2025-11-30T23:45:00.000Z
+ * @stamp S-20251130T235500Z-V-BINARY-WIRING
  * @test-target packages/client/src/extension.ts
  * @description
  * Verifies the behavior of the extension's Composition Root.
- * Confirms service instantiation, initialization, and Command functionality
- * (specifically the new AI Inspector command).
+ * Confirms service instantiation, initialization, command functionality,
+ * and CORRECT BINARY PATH RESOLUTION.
  * @criticality CRITICAL
  * @testing-layer Integration
  */
@@ -14,7 +14,9 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { Mock } from 'vitest';
 import * as vscode from 'vscode';
 import * as path from 'path';
+import * as os from 'os'; // Import os to mock it
 import { activate } from './extension';
+import { R_Mcp_ServerManager } from './lib/context/R_Mcp_ServerManager';
 
 // --- 1. Hoisted Mocks ---
 const { 
@@ -37,6 +39,12 @@ vi.mock('uuid', () => ({
   v3: vi.fn(),
   v4: vi.fn(() => 'mock-uuid-extension'),
   v5: vi.fn(),
+}));
+
+// Mock OS module for platform detection
+vi.mock('os', () => ({
+  platform: vi.fn(),
+  arch: vi.fn(),
 }));
 
 // --- 2. VS Code API Mock ---
@@ -131,9 +139,12 @@ vi.mock('./lib/context/RealProcessSpawner', () => ({
 vi.mock('./lib/ai/SecureStorageService', () => ({ 
   SecureStorageService: vi.fn(function() { return {}; }) 
 }));
+
+// MOCK R_MCP_SERVERMANAGER to capture constructor arguments
 vi.mock('./lib/context/R_Mcp_ServerManager', () => ({ 
-  R_Mcp_ServerManager: vi.fn(function() { return {}; }) 
+  R_Mcp_ServerManager: vi.fn() 
 }));
+
 vi.mock('./lib/workflow/WorktreeQueueManager', () => ({ 
   WorktreeQueueManager: vi.fn(function() { return {}; }) 
 }));
@@ -184,9 +195,44 @@ describe('Extension Activation', () => {
     } as unknown as vscode.ExtensionContext;
   });
 
+  // --- NEW TEST CASE FOR BINARY WIRING ---
+  it('should inject the correct Linux binary path into R_Mcp_ServerManager', async () => {
+    // Arrange
+    mockGwmInitialize.mockResolvedValue(undefined);
+    mockApmInitialize.mockResolvedValue(undefined);
+    vi.mocked(os.platform).mockReturnValue('linux'); // Force Linux
+
+    // Act
+    await activate(mockContext);
+
+    // Assert
+    // Verify R_Mcp_ServerManager was instantiated with the correct path
+    const expectedPath = path.join('/mock/extension/path', 'packages', 'client', 'bin', 'roberto-mcp-linux-x64');
+    expect(R_Mcp_ServerManager).toHaveBeenCalledWith(
+      expect.anything(), // spawner
+      expect.anything(), // factory
+      expectedPath       // binaryPath
+    );
+  });
+
+  it('should fail activation on unsupported platforms', async () => {
+    // Arrange
+    vi.mocked(os.platform).mockReturnValue('sunos'); // Unsupported
+
+    // Act
+    await activate(mockContext);
+
+    // Assert
+    expect(mockShowErrorMessage).toHaveBeenCalledWith(
+      expect.stringContaining('RoboSmith failed to start: Unsupported platform: sunos')
+    );
+  });
+  // ----------------------------------------
+
   it('should instantiate and initialize all core services with correct configuration', async () => {
     mockGwmInitialize.mockResolvedValue(undefined);
     mockApmInitialize.mockResolvedValue(undefined);
+    vi.mocked(os.platform).mockReturnValue('linux'); // Ensure valid platform for general tests
 
     await activate(mockContext);
 
@@ -200,6 +246,10 @@ describe('Extension Activation', () => {
   });
 
   describe('Command: showAiCallInspector', () => {
+    beforeEach(() => {
+        vi.mocked(os.platform).mockReturnValue('linux');
+    });
+
     it('should open webview, fetch logs, and post message', async () => {
       // Arrange
       await activate(mockContext);
@@ -261,6 +311,7 @@ describe('Extension Activation', () => {
   it('should show an error if initialization fails', async () => {
     const initError = new Error('Database locked');
     mockGwmInitialize.mockRejectedValue(initError);
+    vi.mocked(os.platform).mockReturnValue('linux');
 
     await activate(mockContext);
 

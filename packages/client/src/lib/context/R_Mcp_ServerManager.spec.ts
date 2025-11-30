@@ -1,6 +1,6 @@
 /**
  * @file packages/client/src/lib/context/R_Mcp_ServerManager.spec.ts
- * @stamp S-20251106T143000Z-V-DEFINITIVE-FIX
+ * @stamp S-20251130T233000Z-V-BINARY-PATH-FIX
  * @test-target packages/client/src/lib/context/R_Mcp_ServerManager.ts
  * @description Verifies the contract of the refactored, dependency-injected
  * R_Mcp_ServerManager. It tests the two-phase API (spawnProcess, initializeServer)
@@ -13,19 +13,14 @@
 vi.mock('../logging/logger', () => ({
   logger: { info: vi.fn(), debug: vi.fn(), warn: vi.fn(), error: vi.fn() },
 }));
-vi.mock('os', () => ({
-  platform: vi.fn(),
-  arch: vi.fn(),
-}));
+// We no longer need os/path mocks for internal logic, but we use path for test setup
 vi.mock('path', () => ({
   join: vi.fn((...args: string[]) => args.join('/')),
 }));
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { Mocked } from 'vitest';
-import * as os from 'os';
-import * as path from 'path';
-import { R_Mcp_ServerManager, MissingBinaryError, ProcessStartError } from './R_Mcp_ServerManager';
+import { R_Mcp_ServerManager, ProcessStartError } from './R_Mcp_ServerManager';
 import type { JsonRpcClient, JsonRpcClientFactory } from './R_Mcp_ServerManager';
 import type { ProcessSpawner, ManagedProcess } from './IProcessSpawner';
 import { logger } from '../logging/logger';
@@ -56,16 +51,15 @@ describe('R_Mcp_ServerManager', () => {
     mockSpawner = { spawn: vi.fn().mockReturnValue(mockProcess) };
     mockClient = { sendCall: vi.fn().mockResolvedValue({ status: 'ready' }) };
     mockClientFactory = vi.fn().mockReturnValue(mockClient);
-    manager = new R_Mcp_ServerManager(mockSpawner, mockClientFactory);
-
-    vi.mocked(os.platform).mockReturnValue('linux');
-    vi.mocked(os.arch).mockReturnValue('x64');
-    vi.mocked(path.join).mockReturnValue(mockBinaryPath);
+    
+    // UPDATED: Pass the binary path to the constructor
+    manager = new R_Mcp_ServerManager(mockSpawner, mockClientFactory, mockBinaryPath);
   });
 
   describe('spawnProcess (Phase 1)', () => {
     it('should call the spawner and resolve with the process handle on success', async () => {
       const processHandle = await manager.spawnProcess(worktreePath);
+      // UPDATED: Expect the spawner to be called with the injected binary path
       expect(mockSpawner.spawn).toHaveBeenCalledWith(mockBinaryPath, worktreePath);
       expect(processHandle).toBe(mockProcess);
     });
@@ -95,11 +89,8 @@ describe('R_Mcp_ServerManager', () => {
       expect(mockProcess.kill).toHaveBeenCalledWith('SIGKILL');
     });
 
-    it('should throw MissingBinaryError for an unsupported platform', async () => {
-      vi.mocked(os.platform).mockReturnValue('sunos');
-      await expect(manager.spawnProcess(worktreePath)).rejects.toThrow(MissingBinaryError);
-      expect(mockSpawner.spawn).not.toHaveBeenCalled();
-    });
+    // DELETED: 'should throw MissingBinaryError for an unsupported platform'
+    // Rationale: Platform detection is now the responsibility of the Composition Root, not this class.
 
     it('should throw ProcessStartError if the process is missing stdin or stdout streams', async () => {
       Object.defineProperty(mockProcess, 'stdin', { value: null });
@@ -153,9 +144,6 @@ describe('R_Mcp_ServerManager', () => {
       expect(mockProcess.kill).toHaveBeenCalledWith('SIGTERM');
       expect(manager.getClientFor(worktreePath)).toBeUndefined();
       
-      // THIS IS THE FIX: The assertion now uses `expect.stringContaining` to be
-      // less brittle and checks for the correct log message without the period.
-      // This ensures we are only checking for the log from the method under test.
       expect(logger.info).toHaveBeenCalledWith(
         'R-MCP server shut down for: /mock/worktree/path'
       );

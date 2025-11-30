@@ -1,6 +1,6 @@
 /**
  * @file packages/client/src/lib/context/R_Mcp_ServerManager.ts
- * @stamp S-20251106T030000Z-C-SINGLETON-REMOVED
+ * @stamp S-20251130T224800Z-C-BINARY-PATH-INJECTION
  * @architectural-role Orchestrator
  * @description A stateful service that manages the lifecycle of R-MCP server
  * processes. Provides an honest, two-phase API that separates process spawning
@@ -11,10 +11,11 @@
  * 2. DELEGATES all process spawning and termination to the injected adapter.
  * 3. ENFORCES explicit two-phase initialization: spawn, then initialize.
  * 4. IS a plain class with no singleton pattern, ensuring complete test isolation.
+ * 5. RECEIVES the binary path via constructor injection to support cross-platform portability.
  *
  * @api-declaration
  *   - export class R_Mcp_ServerManager
- *   -   public constructor(spawner: ProcessSpawner, clientFactory: JsonRpcClientFactory)
+ *   -   public constructor(spawner: ProcessSpawner, clientFactory: JsonRpcClientFactory, binaryPath: string)
  *   -   public async spawnProcess(worktreePath: string): Promise<ManagedProcess>
  *   -   public async initializeServer(worktreePath: string, process: ManagedProcess): Promise<void>
  *   -   public async spinDownServer(worktreePath: string): Promise<void>
@@ -27,8 +28,6 @@
  *     - state_ownership: "['activeServers']"
  */
 
-import * as path from 'path';
-import * as os from 'os';
 import { logger } from '../logging/logger';
 import type { ProcessSpawner, ManagedProcess } from './IProcessSpawner';
 
@@ -83,6 +82,7 @@ interface ManagedProcessInternal {
 export class R_Mcp_ServerManager {
   private activeServers: Map<string, ManagedProcessInternal> = new Map();
   private readonly clientFactory: JsonRpcClientFactory;
+  private readonly binaryPath: string;
 
   /**
    * Creates a new R_Mcp_ServerManager instance.
@@ -93,12 +93,15 @@ export class R_Mcp_ServerManager {
    * 
    * @param spawner The process spawning adapter (injected dependency)
    * @param clientFactory The RPC client factory function (injected dependency)
+   * @param binaryPath The absolute path to the r-mcp binary (injected dependency)
    */
   public constructor(
     private readonly spawner: ProcessSpawner,
-    clientFactory: JsonRpcClientFactory
+    clientFactory: JsonRpcClientFactory,
+    binaryPath: string
   ) {
     this.clientFactory = clientFactory;
+    this.binaryPath = binaryPath;
   }
 
   /**
@@ -114,11 +117,11 @@ export class R_Mcp_ServerManager {
    * @throws ProcessStartError if the process fails to spawn or lacks required I/O streams.
    */
   public async spawnProcess(worktreePath: string): Promise<ManagedProcess> {
-    const binaryPath = this.getBinaryPath();
     logger.info(`Spawning R-MCP server process for: ${worktreePath}`);
     
     return new Promise<ManagedProcess>((resolve, reject) => {
-      const processStreams = this.spawner.spawn(binaryPath, worktreePath);
+      // Use the injected binary path directly
+      const processStreams = this.spawner.spawn(this.binaryPath, worktreePath);
       
       let isSettled = false;
       
@@ -214,30 +217,5 @@ export class R_Mcp_ServerManager {
    */
   public getClientFor(worktreePath: string): JsonRpcClient | undefined {
     return this.activeServers.get(worktreePath)?.client;
-  }
-
-  /**
-   * Resolves the platform-specific binary path for the R-MCP server executable.
-   * 
-   * @throws MissingBinaryError if the current platform is not supported.
-   */
-  private getBinaryPath(): string {
-    const platform = os.platform();
-    const arch = os.arch();
-    const binDir = path.join(__dirname, '..', '..', '..', 'bin');
-
-    let binaryName = '';
-
-    if (platform === 'darwin') {
-      binaryName = arch === 'arm64' ? 'roberto-mcp-macos-arm64' : 'roberto-mcp-macos-x64';
-    } else if (platform === 'linux') {
-      binaryName = 'roberto-mcp-linux-x64';
-    } else if (platform === 'win32') {
-      binaryName = 'roberto-mcp-windows-x64.exe';
-    } else {
-      throw new MissingBinaryError(`Unsupported platform: ${platform}`);
-    }
-
-    return path.join(binDir, binaryName);
   }
 }
