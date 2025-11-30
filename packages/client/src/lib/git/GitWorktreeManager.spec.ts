@@ -1,13 +1,19 @@
 /**
  * @file packages/client/src/lib/git/GitWorktreeManager.spec.ts
- * @stamp S-20251107T155600Z-C-UPDATED
+ * @stamp S-20251130T081500Z-C-PREAMBLE-FIX
  * @test-target packages/client/src/lib/git/GitWorktreeManager.ts
- * @description Verifies the orchestration logic of the GitWorktreeManager in
- * isolation by providing a mocked IGitAdapter. It tests the self-healing
- * reconciliation loop, state management, command delegation, conflict scan logic,
- * and the new `getAllSessions` method.
- * @criticality The test target is CRITICAL.
+ * @description
+ * Verifies the orchestration logic of the GitWorktreeManager in isolation.
+ * It tests the self-healing reconciliation loop, state persistence, command
+ * delegation to the adapter, and the conflict scan logic.
+ * @criticality CRITICAL (Reason: I/O & Concurrency Management - Point 5. It manages the physical integrity of the workspace).
  * @testing-layer Unit
+ *
+ * @contract
+ *   assertions:
+ *     purity: pure          # Mocks the IGitAdapter.
+ *     external_io: none     # No real Git/FS operations.
+ *     state_ownership: none # Stateless test suite.
  */
 
 // --- HOISTING-SAFE MOCKS ---

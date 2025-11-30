@@ -1,6 +1,6 @@
 /**
  * @file packages/client/src/lib/context/RealProcessSpawner.ts
- * @stamp S-20251105T195212Z-C-CORRECTED
+ * @stamp S-20251130T082000Z-C-PREAMBLE-FIX
  * @architectural-role Utility
  * @description Provides the concrete, "real" implementation of the ProcessSpawner
  * interface. This class encapsulates all direct interactions with the Node.js
@@ -15,9 +15,9 @@
  *
  * @contract
  *   assertions:
- *     - purity: "mutates"
- *     - external_io: "none"
- *     - state_ownership: "none"
+ *     purity: mutates
+ *     external_io: vscode_and_filesystem # Proxies for System I/O (spawning processes).
+ *     state_ownership: none
  */
 
 import { spawn, type ChildProcess } from 'child_process';

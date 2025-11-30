@@ -1,9 +1,19 @@
 /**
  * @file packages/client/src/lib/workflow/WorkflowService.spec.ts
+ * @stamp S-20251130T081500Z-C-PREAMBLE-FIX
  * @test-target packages/client/src/lib/workflow/WorkflowService.ts
- * @description Verifies the contract of the WorkflowService, ensuring it correctly locates, reads, and validates the `workflows.json` manifest, and that it throws specific, user-friendly errors for all anticipated failure modes.
- * @criticality The test target is CRITICAL as it is the loader for the Orchestrator's instructions.
+ * @description
+ * Verifies the `WorkflowService` contract. Ensures it correctly locates, reads,
+ * parses, and validates the `workflows.json` manifest against the schema,
+ * providing specific errors for failure modes.
+ * @criticality CRITICAL (Reason: Core Domain Model Definition - Point 4. It validates the input instructions for the entire system).
  * @testing-layer Unit
+ *
+ * @contract
+ *   assertions:
+ *     purity: pure          # Mocks vscode.workspace.fs.
+ *     external_io: none
+ *     state_ownership: none
  */
 
 // --- HOISTING-SAFE MOCKS ---

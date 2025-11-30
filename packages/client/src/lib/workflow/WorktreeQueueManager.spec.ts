@@ -1,10 +1,19 @@
 /**
  * @file packages/client/src/lib/workflow/WorktreeQueueManager.spec.ts
- * @stamp S-20251107T092000Z-C-QUEUE-MANAGER-TEST-CREATED
+ * @stamp S-20251130T081500Z-C-PREAMBLE-FIX
  * @test-target packages/client/src/lib/workflow/WorktreeQueueManager.ts
- * @description Verifies the WorktreeQueueManager's logic, including immediate execution for clear tasks, correct queuing on conflict, FIFO processing, and the auto-advancement of the queue when a task is marked complete.
- * @criticality The test target is CRITICAL.
+ * @description
+ * Verifies the queueing logic for worktree creation. Tests immediate execution
+ * for clear tasks, FIFO queuing for conflicts, priority overrides, and
+ * auto-advancement when tasks complete.
+ * @criticality CRITICAL (Reason: I/O & Concurrency Management - Point 5. Prevents file system collisions and race conditions).
  * @testing-layer Unit
+ *
+ * @contract
+ *   assertions:
+ *     purity: pure          # Mocks GitWorktreeManager.
+ *     external_io: none
+ *     state_ownership: none
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';

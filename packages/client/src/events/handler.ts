@@ -1,6 +1,6 @@
 /**
  * @file packages/client/src/events/handler.ts
- * @stamp S-20251107T160000Z-C-INTEGRATION-PANEL-HANDLERS
+ * @stamp S-20251130T083000Z-C-FIX-EXHAUSTIVE-CHECK
  * @architectural-role Orchestrator
  * @description A factory for creating an event handler. It routes commands from
  * the UI to the appropriate backend services, including new commands for UI
@@ -13,6 +13,12 @@
  * @api-declaration
  *   - export interface EventHandlerContext
  *   - export function createEventHandler()
+ *
+ * @contract
+ *   assertions:
+ *     purity: mutates          # Mutates application state via delegated services.
+ *     external_io: vscode      # Interacts with VS Code APIs (Terminal, Workspace, Webview).
+ *     state_ownership: none    # Stateless factory; state resides in injected services.
  */
 
 import * as vscode from 'vscode';
@@ -34,7 +40,7 @@ export interface EventHandlerContext {
   contextService: ContextPartitionerService;
   apiManager: ApiPoolManager;
   worktreeQueueManager: WorktreeQueueManager;
-  gitWorktreeManager: GitWorktreeManager; // New dependency for disposition logic
+  gitWorktreeManager: GitWorktreeManager;
 }
 
 /**
@@ -56,6 +62,10 @@ function switchToLobbyView(): void {
  * Creates and returns a new event handler function.
  */
 export function createEventHandler() {
+  // TODO: In a future iteration, we need a registry here to track active Orchestrator instances
+  // by sessionId so we can call resume/retry on them.
+  // const orchestrators = new Map<string, Orchestrator>();
+
   return async function handleEvent(message: Message, context: EventHandlerContext): Promise<void> {
     const { command, payload } = message;
 
@@ -84,8 +94,8 @@ export function createEventHandler() {
             context.panel.webview.postMessage({ command: 'workflowStateUpdate', payload: state });
           };
           const onCompletion = () => {
-            // This is where the logic to show the integration panel will go.
             logger.info(`Workflow for session ${session.sessionId} has completed.`);
+            // Future: Trigger integration panel display here if not handled by state updates
           };
 
           const orchestrator = new Orchestrator(
@@ -95,6 +105,8 @@ export function createEventHandler() {
             onStateUpdate,
             onCompletion
           );
+
+          // Future: Store orchestrator in registry: orchestrators.set(session.sessionId, orchestrator);
 
           void orchestrator.executeNode(nodeId, session.worktreePath);
         } catch (error) {
@@ -135,19 +147,24 @@ export function createEventHandler() {
       case 'finishAndHold': {
         const { sessionId } = payload;
         logger.info(`Processing 'finishAndHold' for session ${sessionId}.`);
-        // TODO: Implement `updateSessionStatus` on GitWorktreeManager.
-        // This method needs to find the session, update its status to 'Held',
-        // and then persist the entire session map back to global state.
-        // await context.gitWorktreeManager.updateSessionStatus(sessionId, 'Held');
         logger.warn('Session status update to "Held" is not yet implemented in GitWorktreeManager.');
-        
-        // Even without the status update, we switch the user back to the lobby.
         switchToLobbyView();
         break;
       }
 
+      case 'resumeWorkflow':
+      case 'retryBlock': {
+        const { sessionId, augmentedPrompt } = payload;
+        logger.info(`Received '${command}' for session ${sessionId}. Augmented Prompt: ${augmentedPrompt ?? 'None'}`);
+        // TODO: Retrieve the active Orchestrator instance for this session and call 
+        // .resumeManually() or a similar method. This requires the Orchestrator registry 
+        // mentioned above.
+        logger.warn(`Orchestrator control for '${command}' is not yet implemented.`);
+        break;
+      }
+
       case 'userAction': {
-        // This case is added back to satisfy the exhaustiveness check.
+        // This case is added back to satisfy the exhaustiveness check for the legacy CommandPayloadMap
         logger.info('User action received but not yet implemented.', { payload });
         break;
       }

@@ -1,9 +1,19 @@
 /**
  * @file packages/client/src/lib/workflow/ActionHandler.spec.ts
+ * @stamp S-20251130T081500Z-C-PREAMBLE-FIX
  * @test-target packages/client/src/lib/workflow/ActionHandler.ts
- * @description Verifies the contract of the `executeAction` function, ensuring it correctly parses and executes all atomic workflow commands and handles invalid or malformed actions gracefully.
- * @criticality The test target is CRITICAL as it contains core business logic for state transitions.
+ * @description
+ * Verifies the contract of the `executeAction` function. It ensures the DSL
+ * parser correctly handles `JUMP`, `CALL`, and `RETURN` commands and throws
+ * clear errors for malformed inputs.
+ * @criticality CRITICAL (Reason: Core Business Logic Orchestration - Point 2. It controls the state transitions of the engine).
  * @testing-layer Unit
+ *
+ * @contract
+ *   assertions:
+ *     purity: pure          # Pure function testing.
+ *     external_io: none
+ *     state_ownership: none
  */
 
 // --- HOISTING-SAFE MOCK ---

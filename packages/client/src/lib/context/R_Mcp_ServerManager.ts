@@ -56,6 +56,12 @@ export class ProcessStartError extends Error {
  * method calls over a given transport, such as the stdio streams of a child process.
  */
 export interface JsonRpcClient {
+  /**
+   * Sends a JSON-RPC method call to the server and awaits the result.
+   * @param method The name of the tool or method to call (e.g., 'get_file_outline').
+   * @param params The arguments object required by the specific tool.
+   * @returns A promise resolving to the server's response result.
+   */
   sendCall: (method: string, params: unknown) => Promise<unknown>;
 }
 

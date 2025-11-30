@@ -1,40 +1,51 @@
 /**
  * @file packages/client/src/events/handler.spec.ts
- * @stamp S-20251107T161000Z-C-HOISTING-FIX
+ * @stamp S-20251130T081500Z-C-PREAMBLE-FIX
  * @test-target packages/client/src/events/handler.ts
- * @description Verifies that the event handler correctly routes all commands,
- * including the new `acceptAndMerge`, `rejectAndDiscard`, etc., to the
- * correct backend service methods.
- * @criticality The test target is CRITICAL as it is a core orchestrator.
+ * @description
+ * Verifies that the event handler correctly parses incoming messages and routes
+ * them to the appropriate backend services (`SettingsStore`, `Orchestrator`,
+ * `GitWorktreeManager`). It acts as the controller test for the UI<->Backend bridge.
+ * @criticality CRITICAL (Reason: Core Business Logic Orchestration - Point 2. It is the single entry point for all user commands).
  * @testing-layer Unit
+ *
+ * @contract
+ *   assertions:
+ *     purity: pure          # Mocks all side effects (VS Code API, Stores, Services).
+ *     external_io: none     # Uses in-memory mocks.
+ *     state_ownership: none # Stateless test suite.
  */
 
-// --- HOISTING-SAFE MOCKS ---
-vi.mock('vscode', () => {
-  // All mock functions MUST be created INSIDE the factory to avoid hoisting errors.
-  const mockCreateTerminal = vi.fn();
-  const mockUpdateWorkspaceFolders = vi.fn();
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import type { Mock, Mocked } from 'vitest';
 
-  return {
-    window: { 
-      createOutputChannel: vi.fn(() => ({ appendLine: vi.fn() })),
-      createTerminal: mockCreateTerminal,
-    },
-    workspace: {
-      workspaceFolders: [{ uri: { fsPath: '/mock/workspace' } }],
-      updateWorkspaceFolders: mockUpdateWorkspaceFolders,
-    },
-    default: {},
-    // Expose the internal mocks for test access in a hoisting-safe way.
-    __mocks: {
-      mockCreateTerminal,
-      mockUpdateWorkspaceFolders,
-    },
-  };
-});
+// Mock uuid FIRST to prevent ESM import issues
+vi.mock('uuid', () => ({
+  v4: vi.fn(() => 'mocked-uuid-v4'),
+  v1: vi.fn(() => 'mocked-uuid-v1'),
+  v3: vi.fn(() => 'mocked-uuid-v3'),
+  v5: vi.fn(() => 'mocked-uuid-v5'),
+}));
 
-const mockExecuteNode = vi.fn();
+// Use vi.hoisted to create mock functions that can be referenced in the mock factory
+const { mockCreateTerminal, mockUpdateWorkspaceFolders } = vi.hoisted(() => ({
+  mockCreateTerminal: vi.fn(),
+  mockUpdateWorkspaceFolders: vi.fn(),
+}));
 
+// Mock vscode with complete window AND workspace objects
+vi.mock('vscode', () => ({
+  window: {
+    createOutputChannel: vi.fn(() => ({ appendLine: vi.fn() })),
+    createTerminal: mockCreateTerminal,
+  },
+  workspace: {
+    workspaceFolders: [{ uri: { fsPath: '/mock/workspace' } }],
+    updateWorkspaceFolders: mockUpdateWorkspaceFolders,
+  },
+}));
+
+// Mock other dependencies
 vi.mock('../features/settings/state/SettingsStore');
 vi.mock('../lib/workflow/Orchestrator', () => ({
   Orchestrator: vi.fn(function() {
@@ -49,9 +60,8 @@ vi.mock('../lib/logging/logger', () => ({
   logger: { info: vi.fn(), debug: vi.fn(), warn: vi.fn(), error: vi.fn() },
 }));
 
-import { describe, it, expect, vi, beforeEach } from 'vitest';
-import type { Mock, Mocked } from 'vitest';
-import * as vscode from 'vscode';
+const mockExecuteNode = vi.fn();
+
 import { createEventHandler, type EventHandlerContext } from './handler';
 import { settingsStore } from '../features/settings/state/SettingsStore';
 import { Orchestrator } from '../lib/workflow/Orchestrator';
@@ -67,17 +77,12 @@ import type { CreateWorktreeArgs, WorktreeSession } from '../lib/git/GitWorktree
 import { logger } from '../lib/logging/logger';
 import type { GitAdapter } from '../lib/git/IGitAdapter';
 
-
 describe('handleEvent', () => {
   let mockContext: EventHandlerContext;
   let mockPostMessage: Mock;
   let handleEvent: (message: Message, context: EventHandlerContext) => Promise<void>;
   let mockWorktreeQueueManager: Mocked<WorktreeQueueManager>;
   let mockGitWorktreeManager: Mocked<GitWorktreeManager>;
-  
-  // These will be populated from the hoisted mock in beforeEach
-  let mockCreateTerminal: Mock;
-  let mockUpdateWorkspaceFolders: Mock;
 
   const mockLoadApiKeys = vi.fn();
   const mockAddApiKey = vi.fn();
@@ -85,18 +90,6 @@ describe('handleEvent', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-
-    // Create a specific type for our mocked vscode module to avoid using 'any'.
-    type VscodeWithMocks = typeof vscode & {
-      __mocks: {
-        mockCreateTerminal: Mock;
-        mockUpdateWorkspaceFolders: Mock;
-      };
-    };
-
-    // Retrieve the hoisted mocks in a type-safe way.
-    mockCreateTerminal = (vscode as VscodeWithMocks).__mocks.mockCreateTerminal;
-    mockUpdateWorkspaceFolders = (vscode as VscodeWithMocks).__mocks.mockUpdateWorkspaceFolders;
     
     handleEvent = createEventHandler();
     mockPostMessage = vi.fn();

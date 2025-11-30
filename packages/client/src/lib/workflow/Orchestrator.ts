@@ -1,6 +1,6 @@
 /**
  * @file packages/client/src/lib/workflow/Orchestrator.ts
- * @stamp S-20251107T130000Z-C-REFACTOR-FINALIZE
+ * @stamp S-20251130T082000Z-C-PREAMBLE-FIX
  * @architectural-role Orchestrator
  * @description The deterministic, stateful, graph-based execution engine for all workflows. It is the central class that manages the execution loop, runtime state, and delegation to I/O services.
  * @core-principles
@@ -16,9 +16,9 @@
  *
  * @contract
  *   assertions:
- *     - purity: "mutates"       # Owns and mutates its internal runtime state.
- *     - external_io: "https-apis" # Delegates to ApiPoolManager which performs external I/O.
- *     - state_ownership: "['currentBlockId', 'executionPayload', 'returnStack']"
+ *     purity: mutates
+ *     external_io: https_apis  # Delegates to ApiPoolManager which performs external I/O.
+ *     state_ownership: ['currentBlockId', 'executionPayload', 'returnStack']
  */
 
 import { assembleContext } from './Orchestrator.context';

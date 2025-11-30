@@ -8,18 +8,20 @@
  * 2. MUST extend `tsconfig.base.json` to inherit shared compiler options.
  * 3. OWNS the `include` and `exclude` arrays that define the complete set of files belonging to the project.
  */
- {
+{
   "extends": "./tsconfig.base.json",
   "include": [
     "packages/**/*.ts",
     "webview-ui/src/**/*.ts",
     "webview-ui/src/**/*.svelte",
+    "webview-ui/vitest.setup.ts",
     "vitest.config.mts",
+    "vitest.config.node.mts",
+    "vitest.config.browser.mts",
     "eslint.config.mjs",
     "svelte.config.mjs"
   ],
   "exclude": [
-    "node_modules",
-    "context-slicer"
+    "node_modules"
   ]
 }

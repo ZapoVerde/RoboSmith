@@ -5,28 +5,23 @@
  * @description Verifies the aiClient façade, ensuring it correctly instantiates and delegates calls to the appropriate mocked provider based on the input configuration.
  * @criticality The test target is CRITICAL as it contains core business logic.
  * @testing-layer Unit
- *
- * @contract
- *   assertions:
- *     - Mocks concrete provider modules.
- *     - Verifies correct delegation based on provider key.
- *     - Verifies correct error handling for unsupported providers.
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import type { Mock } from 'vitest';
 import { aiClient } from './aiClient';
 import type { ApiKey, WorkOrder, ApiResult } from './types';
 
-// 1. Declare a top-level variable with an explicit, strong type for our mock function.
-// This defines its complete signature, satisfying TypeScript's strictness rules.
-let mockGenerateCompletion: Mock<(apiKey: ApiKey, workOrder: WorkOrder) => Promise<ApiResult>>;
+// 1. Use vi.hoisted to create the mock function BEFORE the module mocks run.
+// This prevents the ReferenceError caused by accessing a variable before initialization.
+const { mockGenerateCompletion } = vi.hoisted(() => {
+  return { mockGenerateCompletion: vi.fn() };
+});
 
-// 2. Mock the entire module. This block is hoisted by Vitest and runs first.
+// 2. Mock the entire module using the hoisted mock function.
 vi.mock('./providers/OpenAiProvider', () => {
   return {
     OpenAiProvider: class {
-      // The mock implementation calls our typed, top-level mock function.
+      // The mock implementation calls our hoisted mock function.
       generateCompletion(...args: [ApiKey, WorkOrder]) {
         return mockGenerateCompletion(...args);
       }
@@ -38,10 +33,9 @@ describe('aiClient', () => {
   let mockWorkOrder: WorkOrder;
 
   beforeEach(() => {
-    // 5. Before each test, create a fresh mock function and assign it.
-    mockGenerateCompletion = vi.fn();
-    vi.clearAllMocks();
-
+    // 3. Reset the mock before each test to ensure a clean state.
+    mockGenerateCompletion.mockReset();
+    
     mockWorkOrder = {
       model: 'gpt-4o',
       prompt: 'Test prompt from aiClient.spec.ts',

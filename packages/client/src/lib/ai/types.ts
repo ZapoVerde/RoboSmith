@@ -1,6 +1,6 @@
 /**
  * @file packages/client/src/lib/ai/types.ts
- * @stamp S-20251031-T150200Z-C-g3d4f5a6
+ * @stamp {"timestamp":"2025-11-30T08:35:00.000Z"}
  * @architectural-role Type Definition
  * @description Defines the canonical, shared data contracts for the entire AI Service Layer. This file ensures type safety and a stable, unambiguous interface between all components of the service.
  * @core-principles
@@ -9,29 +9,20 @@
  * 3. MUST NOT contain any executable code or business logic.
  *
  * @api-declaration
- *   - export interface ApiKey
+ *   - export interface ApiKey (Re-exported from @shared/domain/api-key)
  *   - export interface WorkOrder
  *   - export interface ApiResult
  *
  * @contract
  *   assertions:
- *     - purity: "pure"
- *     - external_io: "none"
- *     - state_ownership: "none"
+ *     purity: pure
+ *     external_io: none
+ *     state_ownership: none
  */
 
-/**
- * @id packages/client/src/lib/ai/types.ts#ApiKey
- * @description Represents a single, identifiable API key with its provider metadata. This is the shape that will be securely stored.
- */
-export interface ApiKey {
-  /** A unique identifier for the key within the pool, e.g., 'openai-personal-1'. */
-  id: string;
-  /** The secret API key value. */
-  secret: string;
-  /** The provider this key belongs to, used for routing logic. */
-  provider: 'openai' | 'google' | 'anthropic';
-}
+// RE-EXPORT: Use the shared domain definition as the source of truth.
+import type { ApiKey } from '@shared/domain/api-key';
+export type { ApiKey };
 
 /**
  * @id packages/client/src/lib/ai/types.ts#WorkOrder

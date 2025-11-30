@@ -1,0 +1,76 @@
+version: 1
+project:
+  targetProjectRoot: /home/user/roboSmith
+sanitation:
+  maxUploadSizeMb: 500
+  acceptedExtensions:
+    - html
+    - css
+    - js
+    - jsx
+    - ts
+    - tsx
+    - json
+    - yaml
+    - md
+    - py
+    - go
+    - java
+    - c
+    - cpp
+    - h
+    - sql
+    - rs
+    - toml
+    - svelte
+    - mts
+    - nix
+    - mjs
+  denyPatterns:
+    - .git/
+    - .svn/
+    - .hg/
+    - node_modules/
+    - bower_components/
+    - dist/
+    - build/
+    - out/
+    - .next/
+    - .nuxt/
+    - .output/
+    - .cache/
+    - coverage/
+    - '*.log'
+    - npm-debug.log*
+    - yarn-debug.log*
+    - yarn-error.log*
+    - .pnpm-debug.log*
+    - .DS_Store
+    - Thumbs.db
+    - .env
+    - .env.local
+    - '*.pem'
+    - '*.key'
+presets:
+  - id: config-files
+    name: Configuration
+    category: Setup
+    summary: All configuration files in the root.
+    patterns:
+      - '**.json'
+      - '**.yaml'
+      - '*.js'
+      - '*.ts'
+      - '*.mts'
+      - '*.mjs'
+      - '**.mts'
+      - '**.mjs'
+      - '**/vitest*'
+      - '**/eslint*'
+      - '**/*.d.ts'
+    exclusions:
+      - package-lock.json
+      - pnpm-lock.yaml
+liveDevelopment:
+  watchDebounceMs: 2000
+  staleRefetchDelayMs: 5000

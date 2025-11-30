@@ -1,6 +1,6 @@
 /**
  * @file packages/client/src/lib/logging/logger.ts
- * @stamp S-20251101-T132000Z-C-REVISED
+ * @stamp S-20251130T082000Z-C-PREAMBLE-FIX
  * @architectural-role Utility
  * @description Implements a centralized, level-based, singleton logger that integrates with the VS Code Output Channel. It is the single, authoritative source for all backend logging.
  * @core-principles
@@ -8,6 +8,17 @@
  * 2. MUST direct all output to a dedicated VS Code Output Channel.
  * 3. OWNS the logic for filtering messages based on the extension's run mode (Development vs. Production).
  * 4. MUST be initialized once at startup with the extension's mode.
+ *
+ * @api-declaration
+ *   - export enum LogLevel
+ *   - export class Logger
+ *   - export const logger: Logger
+ *
+ * @contract
+ *   assertions:
+ *     purity: mutates          # Writes to an output stream.
+ *     external_io: vscode      # Wraps the vscode.OutputChannel API.
+ *     state_ownership: ['currentLevel', 'isInitialized']
  */
 
 import * as vscode from 'vscode';

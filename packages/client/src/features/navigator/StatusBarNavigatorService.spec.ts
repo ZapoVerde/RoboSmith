@@ -9,7 +9,15 @@
  * @criticality The test target is CRITICAL as it is a primary user-facing UI orchestrator.
  * @testing-layer Unit
  */
+import { vi } from 'vitest';
 
+// Mock uuid FIRST to prevent ESM import issues
+vi.mock('uuid', () => ({
+  v4: vi.fn(() => 'mocked-uuid-v4'),
+  v1: vi.fn(() => 'mocked-uuid-v1'),
+  v3: vi.fn(() => 'mocked-uuid-v3'),
+  v5: vi.fn(() => 'mocked-uuid-v5'),
+}));
 // --- HOISTING-SAFE VSCODE MOCK ---
 vi.mock('vscode', () => {
     const mockStatusBarItem = { show: vi.fn(), text: '', tooltip: '', command: '' };
@@ -51,7 +59,7 @@ vi.mock('vscode', () => {
     };
   });
   
-  import { describe, it, expect, vi, beforeEach } from 'vitest';
+  import { describe, it, expect, beforeEach } from 'vitest';
   import type { Mock, Mocked } from 'vitest';
   import * as vscode from 'vscode';
   import { StatusBarNavigatorService } from './StatusBarNavigatorService';

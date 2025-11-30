@@ -1,10 +1,19 @@
 /**
  * @file packages/client/src/lib/workflow/Orchestrator.context.spec.ts
- * @stamp S-20251107T130300Z-C-REFACTOR-FINALIZE
+ * @stamp S-20251130T081500Z-C-PREAMBLE-FIX
  * @test-target packages/client/src/lib/workflow/Orchestrator.context.ts
- * @description A focused unit test suite for the pure `assembleContext` helper function. It verifies the five-layer memory model assembly, context inheritance rules, and payload merge strategy execution in complete isolation.
- * @criticality The test target is not independently critical, but it provides a core capability to a CRITICAL component.
+ * @description
+ * A focused unit test suite for the `assembleContext` logic. It verifies the
+ * 5-layer memory model assembly, context inheritance boundaries (`context_inheritance: false`),
+ * and the payload merge strategy.
+ * @criticality CRITICAL (Reason: Core Business Logic Orchestration - Point 2. Determines the actual prompt sent to the AI).
  * @testing-layer Unit
+ *
+ * @contract
+ *   assertions:
+ *     purity: pure          # Pure function testing.
+ *     external_io: none
+ *     state_ownership: none
  */
 
 // --- Environment Mocks (Essential for transitive dependencies) ---

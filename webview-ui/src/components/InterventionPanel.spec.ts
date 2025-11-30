@@ -1,16 +1,11 @@
+// ----- webview-ui/src/components/InterventionPanel.spec.ts -----
 /**
  * @file webview-ui/src/components/InterventionPanel.spec.ts
- * @stamp {"timestamp":"2025-11-09T02:35:00.000Z"}
+ * @stamp S-20251129T132000Z-C-FIX-HOISTING
  * @test-target webview-ui/src/components/InterventionPanel.svelte
- * @description Verifies the rendering contract of the InterventionPanel. It ensures the interactive controls are correctly shown/hidden based on the `isHalted` prop and that the action buttons are wired to the correct logic handlers.
- * @criticality The test target is CRITICAL as it is the primary user control surface for a halted workflow.
+ * @description Verifies the rendering contract of the InterventionPanel.
+ * @criticality The test target is CRITICAL.
  * @testing-layer Integration
- *
- * @contract
- *   assertions:
- *     - Mocks `InterventionPanel.logic.ts` and the global `acquireVsCodeApi`.
- *     - Verifies correct rendering in both "read-only" and "interactive" modes.
- *     - Verifies button clicks dispatch correct events with and without user input.
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
@@ -21,17 +16,21 @@ import type { ContextSegment } from '../../../packages/client/src/shared/types';
 
 // --- Mock Dependencies ---
 
-// 1. Mock the headless logic module
-// We export the mocks so we can access them inside the tests.
-export const mockDispatchResumeWorkflow = vi.fn();
-export const mockDispatchRetryBlock = vi.fn();
+// 1. Use vi.hoisted to create the mocks BEFORE the module mock is evaluated
+const { mockDispatchResumeWorkflow, mockDispatchRetryBlock } = vi.hoisted(() => {
+  return {
+    mockDispatchResumeWorkflow: vi.fn(),
+    mockDispatchRetryBlock: vi.fn(),
+  };
+});
 
+// 2. Mock the headless logic module using the hoisted mocks
 vi.mock('./InterventionPanel.logic.ts', () => ({
   dispatchResumeWorkflow: mockDispatchResumeWorkflow,
   dispatchRetryBlock: mockDispatchRetryBlock,
 }));
 
-// 2. Mock the global VSCode API
+// 3. Mock the global VSCode API
 const mockPostMessage = vi.fn();
 vi.stubGlobal('acquireVsCodeApi', () => ({
   postMessage: mockPostMessage,
@@ -108,7 +107,6 @@ describe('InterventionPanel', () => {
   });
 
   // --- Supplementary Test: Button Clicks (without user input) --- 
-  // This genuinely useful test covers the common case where a user clicks a button without typing anything.
   it('should call dispatch functions with an empty string for guidance if none is provided', async () => {
     // Arrange
     const user = userEvent.setup();
