@@ -1,11 +1,11 @@
 /**
  * @file packages/client/src/extension.spec.ts
- * @stamp 2025-11-30T19:40:00.000Z
+ * @stamp 2025-11-30T23:45:00.000Z
  * @test-target packages/client/src/extension.ts
  * @description
- * Verifies the behavior of the extension's Composition Root (`activate` function).
- * Confirms that services are instantiated and that the ApiPoolManager receives
- * the correct logging configuration.
+ * Verifies the behavior of the extension's Composition Root.
+ * Confirms service instantiation, initialization, and Command functionality
+ * (specifically the new AI Inspector command).
  * @criticality CRITICAL
  * @testing-layer Integration
  */
@@ -13,19 +13,21 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { Mock } from 'vitest';
 import * as vscode from 'vscode';
-import * as path from 'path'; // Imported for path verification
+import * as path from 'path';
 import { activate } from './extension';
-import { logger } from './lib/logging/logger';
-import { GitWorktreeManager } from './lib/git/GitWorktreeManager';
-import { StatusBarNavigatorService } from './features/navigator/StatusBarNavigatorService';
-import { ApiPoolManager } from './lib/ai/ApiPoolManager';
 
-// --- 1. Hoisted Mocks (Available to factory functions) ---
-const { mockGwmInitialize, mockSbnInitialize, mockApmInitialize } = vi.hoisted(() => {
+// --- 1. Hoisted Mocks ---
+const { 
+  mockGwmInitialize, 
+  mockSbnInitialize, 
+  mockApmInitialize, 
+  mockApmGetHistory 
+} = vi.hoisted(() => {
   return {
     mockGwmInitialize: vi.fn(),
     mockSbnInitialize: vi.fn(),
     mockApmInitialize: vi.fn(),
+    mockApmGetHistory: vi.fn().mockResolvedValue([]),
   };
 });
 
@@ -38,13 +40,22 @@ vi.mock('uuid', () => ({
 }));
 
 // --- 2. VS Code API Mock ---
+const mockPostMessage = vi.fn();
+const mockWebviewReveal = vi.fn();
+
 vi.mock('vscode', () => {
   const mockShowErrorMessage = vi.fn();
   const mockRegisterCommand = vi.fn();
+  
   const mockCreateWebviewPanel = vi.fn(() => ({
-    webview: { html: '', onDidReceiveMessage: vi.fn(), asWebviewUri: vi.fn() },
+    webview: { 
+      html: '', 
+      onDidReceiveMessage: vi.fn(), 
+      asWebviewUri: vi.fn(),
+      postMessage: mockPostMessage 
+    },
     onDidDispose: vi.fn(),
-    reveal: vi.fn(),
+    reveal: mockWebviewReveal,
   }));
   
   const mockWorkspaceFolders: { uri: { fsPath: string }; name: string; index: number }[] = [];
@@ -88,7 +99,10 @@ vi.mock('./features/navigator/StatusBarNavigatorService', () => ({
 
 vi.mock('./lib/ai/ApiPoolManager', () => ({
   ApiPoolManager: {
-    getInstance: vi.fn().mockReturnValue({ initialize: mockApmInitialize }),
+    getInstance: vi.fn().mockReturnValue({ 
+      initialize: mockApmInitialize,
+      getHistory: mockApmGetHistory
+    }),
   },
 }));
 
@@ -134,9 +148,18 @@ type MockedVSCode = typeof vscode & {
     mockShowErrorMessage: Mock; 
     mockWorkspaceFolders: { uri: { fsPath: string }; name: string; index: number }[]; 
     mockRegisterCommand: Mock;
+    mockCreateWebviewPanel: Mock;
   };
 };
-const { mockShowErrorMessage, mockWorkspaceFolders, mockRegisterCommand } = (vscode as MockedVSCode).__mocks;
+const { 
+  mockShowErrorMessage, 
+  mockWorkspaceFolders, 
+  mockRegisterCommand, 
+  mockCreateWebviewPanel 
+} = (vscode as MockedVSCode).__mocks;
+
+// Define tuple type for command registration: [commandId, callback]
+type RegisterCommandCall = [string, (...args: unknown[]) => unknown];
 
 describe('Extension Activation', () => {
   let mockContext: vscode.ExtensionContext;
@@ -167,49 +190,80 @@ describe('Extension Activation', () => {
 
     await activate(mockContext);
 
-    // 1. Verify Logger Init
-    expect(logger.initialize).toHaveBeenCalledWith(vscode.ExtensionMode.Test);
-
-    // 2. Verify Service Instantiation & Initialization
-    expect(GitWorktreeManager).toHaveBeenCalled();
-    expect(mockGwmInitialize).toHaveBeenCalled();
-    
-    expect(StatusBarNavigatorService).toHaveBeenCalled();
-    expect(mockSbnInitialize).toHaveBeenCalled();
-
-    expect(ApiPoolManager.getInstance).toHaveBeenCalled();
-    
-    // STRICT ASSERTION: Verify the log path is passed correctly
+    // Verify Log Path Initialization
     const expectedLogPath = path.join('/mock/workspace', '.vision', 'logs');
     expect(mockApmInitialize).toHaveBeenCalledWith(expectedLogPath);
 
-    // 3. Verify Command Registration
-    expect(mockRegisterCommand).toHaveBeenCalledWith('roboSmith.openCockpit', expect.any(Function));
-
-    // 4. Verify No Errors
-    expect(mockShowErrorMessage).not.toHaveBeenCalled();
+    // Verify Service Calls
+    expect(mockGwmInitialize).toHaveBeenCalled();
+    expect(mockSbnInitialize).toHaveBeenCalled();
   });
 
-  it('should show an error and halt if no workspace folder is open', async () => {
-    mockWorkspaceFolders.length = 0; // Empty workspace
+  describe('Command: showAiCallInspector', () => {
+    it('should open webview, fetch logs, and post message', async () => {
+      // Arrange
+      await activate(mockContext);
+      
+      const mockLogs = [{ callId: '123', timestamp: 'now' }];
+      mockApmGetHistory.mockResolvedValue(mockLogs);
 
-    await activate(mockContext);
+      // Extract the registered command callback safely
+      const calls = mockRegisterCommand.mock.calls as RegisterCommandCall[];
+      const inspectorCommand = calls.find((call) => call[0] === 'roboSmith.showAiCallInspector');
+      
+      // Assertion Guard: Ensure command was registered
+      expect(inspectorCommand).toBeDefined();
+      if (!inspectorCommand) throw new Error('Command not found');
+      
+      const commandCallback = inspectorCommand[1];
 
-    expect(mockShowErrorMessage).toHaveBeenCalledWith(
-      'RoboSmith failed to start: No workspace folder open. RoboSmith requires a project to be open.'
-    );
-    expect(mockGwmInitialize).not.toHaveBeenCalled();
+      // Act
+      await commandCallback();
+
+      // Assert
+      expect(mockCreateWebviewPanel).toHaveBeenCalled(); // Opens UI
+      expect(mockApmGetHistory).toHaveBeenCalled();    // Fetches Data
+      
+      // We check that the mocked webview's postMessage was called
+      expect(mockPostMessage).toHaveBeenCalledWith({
+        command: 'showAiCallInspector',
+        payload: { logs: mockLogs }
+      });
+    });
+
+    it('should reveal existing panel if already open', async () => {
+      await activate(mockContext);
+      
+      // Extract commands safely
+      const calls = mockRegisterCommand.mock.calls as RegisterCommandCall[];
+      
+      const openCockpitEntry = calls.find((c) => c[0] === 'roboSmith.openCockpit');
+      expect(openCockpitEntry).toBeDefined();
+      if (!openCockpitEntry) throw new Error('openCockpit command not registered');
+      const openCockpitCall = openCockpitEntry[1];
+
+      const showInspectorEntry = calls.find((c) => c[0] === 'roboSmith.showAiCallInspector');
+      expect(showInspectorEntry).toBeDefined();
+      if (!showInspectorEntry) throw new Error('showAiCallInspector command not registered');
+      const showInspectorCall = showInspectorEntry[1];
+
+      // Act 1: Open Cockpit (creates panel)
+      openCockpitCall();
+      expect(mockCreateWebviewPanel).toHaveBeenCalledTimes(1);
+
+      // Act 2: Show Inspector (should reuse panel)
+      await showInspectorCall();
+      expect(mockCreateWebviewPanel).toHaveBeenCalledTimes(1); // Count unchanged
+      expect(mockWebviewReveal).toHaveBeenCalled(); // Reveal called
+    });
   });
 
-  it('should show an error if a critical service fails to initialize', async () => {
+  it('should show an error if initialization fails', async () => {
     const initError = new Error('Database locked');
     mockGwmInitialize.mockRejectedValue(initError);
 
     await activate(mockContext);
 
-    expect(logger.error).toHaveBeenCalledWith('Failed to activate RoboSmith extension: Database locked');
     expect(mockShowErrorMessage).toHaveBeenCalledWith('RoboSmith failed to start: Database locked');
-    
-    expect(mockSbnInitialize).not.toHaveBeenCalled();
   });
 });

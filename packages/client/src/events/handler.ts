@@ -1,25 +1,18 @@
 /**
  * @file packages/client/src/events/handler.ts
- * @stamp 2025-11-30T15:40:00.000Z
+ * @stamp 2025-11-30T22:40:00.000Z
  * @architectural-role Orchestrator
- * @description A factory for creating an event handler. Routes commands from
- * the UI to backend services and manages the Registry of active Orchestrators.
+ * @description A factory for creating an event handler. It routes commands from
+ * the UI to the appropriate backend services, including new commands for UI
+ * orchestration and final workflow disposition.
  * @core-principles
  * 1. IS the single entry point for all commands from the UI layer.
- * 2. OWNS the registry of active Orchestrator instances (Session -> Instance).
- * 3. DELEGATES business logic to services/orchestrators.
- *
- * @api-declaration
- *   - export function createEventHandler()
- *
- * @contract
- *   assertions:
- *     purity: mutates
- *     external_io: vscode
- *     state_ownership: ['orchestratorRegistry']
+ * 2. DELEGATES all business logic to the appropriate service or store.
+ * 3. ENFORCES testability by design through state encapsulation.
  */
 
 import * as vscode from 'vscode';
+import { v4 as uuidv4 } from 'uuid';
 import type { Message, WorkflowManifest, WorkflowViewState } from '../shared/types';
 import { settingsStore } from '../features/settings/state/SettingsStore';
 import { Orchestrator } from '../lib/workflow/Orchestrator';
@@ -178,6 +171,52 @@ export function createEventHandler() {
         break;
       }
 
+      case 'rerunCall': {
+        const { modifiedRequest } = payload;
+        const startTime = Date.now();
+        
+        try {
+            // Reconstruct a WorkOrder from the flat request for the ApiPoolManager
+            const workOrder = {
+                worker: 'Inspector:ReRun',
+                worktreePath: vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || '',
+                context: [{
+                    id: uuidv4(),
+                    type: 'USER_PROMPT',
+                    content: modifiedRequest.prompt,
+                    timestamp: new Date().toISOString()
+                }],
+                sessionId: 'inspector-adhoc',
+                stepName: 'Inspector Re-run'
+            };
+
+            const result = await context.apiManager.execute(workOrder);
+            
+            // In a real implementation, we would extract the specific AI text.
+            // For V1, we assume the last segment of the returned payload is the response.
+            const responseContent = result.newPayload[result.newPayload.length - 1]?.content || '(No content)';
+
+            context.panel.webview.postMessage({
+                command: 'rerunComplete',
+                payload: {
+                    content: responseContent,
+                    durationMs: Date.now() - startTime
+                }
+            });
+
+        } catch (error) {
+            context.panel.webview.postMessage({
+                command: 'rerunComplete',
+                payload: {
+                    content: '',
+                    durationMs: Date.now() - startTime,
+                    error: error instanceof Error ? error.message : String(error)
+                }
+            });
+        }
+        break;
+      }
+
       case 'userAction': {
         logger.info('User action received but not yet implemented.', { payload });
         break;
@@ -188,7 +227,6 @@ export function createEventHandler() {
       }
 
       default: {
-        // FIX: Pass the command as a structured context object, not a raw string.
         logger.warn(`[EventHandler] Received unhandled command`, { command: command as unknown as string });
         break;
       }

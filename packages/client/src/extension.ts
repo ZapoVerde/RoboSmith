@@ -1,6 +1,6 @@
 /**
  * @file packages/client/src/extension.ts
- * @stamp 2025-11-30T19:00:00.000Z
+ * @stamp 2025-11-30T23:10:00.000Z
  * @architectural-role Feature Entry Point
  * @description
  * The main activation entry point for the VS Code extension. It serves as the
@@ -161,13 +161,34 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       );
     };
 
+    // --- 5. Command Registration ---
+
     context.subscriptions.push(
       vscode.commands.registerCommand('roboSmith.openCockpit', () => {
         createOrShowWebview();
       })
     );
 
-    // --- 5. Auto-Ignition Logic (The "Reload Gap" Fix) ---
+    context.subscriptions.push(
+      vscode.commands.registerCommand('roboSmith.showAiCallInspector', async () => {
+        createOrShowWebview();
+        
+        try {
+          const logs = await apiPoolManager.getHistory();
+          if (currentPanel) {
+            currentPanel.webview.postMessage({
+              command: 'showAiCallInspector',
+              payload: { logs }
+            });
+          }
+        } catch (error) {
+          logger.error('Failed to load AI call history.', { error });
+          vscode.window.showErrorMessage('Failed to load AI Call Inspector history.');
+        }
+      })
+    );
+
+    // --- 6. Auto-Ignition Logic (The "Reload Gap" Fix) ---
     // Check if we have a pending workflow start from before a window reload.
     const pendingWorkflow = context.globalState.get<PendingWorkflowState>(StatusBarNavigatorService.PENDING_WORKFLOW_KEY);
     

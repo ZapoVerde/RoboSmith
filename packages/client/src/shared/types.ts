@@ -1,6 +1,6 @@
 /**
  * @file packages/client/src/shared/types.ts
- * @stamp 2025-11-30T18:00:00.000Z
+ * @stamp 2025-11-30T22:00:00.000Z
  * @architectural-role Type Definition
  * @description
  * Defines the complete, bidirectional message contract for the asynchronous event
@@ -9,12 +9,11 @@
  * @core-principles
  * 1. IS the single source of truth for the client's event bus and workflow contracts.
  * 2. MUST contain only pure TypeScript type/interface definitions.
- * 3. ENFORCES the final, hardened architectural model of Nodes, Blocks, and Payloads.
+ * 3. ENFORCES the final, hardened architectural model of Nodes, Blocks, Payloads, and Logs.
  *
  * @api-declaration
- *   - Type Aliases for Event Bus: `Message`, `ExtensionMessage`, `FinalDecisionMessage`, `InterventionMessage`
- *   - Interfaces for Workflow Engine: `ContextSegment`, `Transition`, `BlockDefinition`, `NodeDefinition`, `WorkflowManifest`, `WorkflowViewState`, `AiCallLog`
- *   - Type Alias for Workflow Engine: `ExecutionPayload`
+ *   - Type Aliases: ExecutionPayload, Message, ExtensionMessage, FinalDecisionMessage, InterventionMessage
+ *   - Interfaces: ContextSegment, Transition, BlockDefinition, NodeDefinition, WorkflowManifest, AiCallLog, WorkflowViewState
  *
  * @contract
  *   assertions:
@@ -337,4 +336,12 @@ export type ExtensionMessage =
       command: 'apiKeyListUpdate';
       payload: { apiKeys: ApiKey[] };
     }
-  | TaskReadyForIntegrationMessage;
+  | TaskReadyForIntegrationMessage
+  | {
+      command: 'showAiCallInspector';
+      payload: { logs: AiCallLog[] };
+    }
+  | {
+      command: 'rerunComplete';
+      payload: { content: string; durationMs: number; error?: string };
+    };

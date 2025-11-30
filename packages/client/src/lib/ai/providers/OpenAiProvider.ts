@@ -1,6 +1,6 @@
 /**
  * @file packages/client/src/lib/ai/providers/OpenAiProvider.ts
- * @stamp S-20251031-T150425Z-C-m2n3o4p5
+ * @stamp 2025-11-30T18:50:00.000Z
  * @architectural-role Business Logic
  * @description A concrete implementation of the `IAiProvider` interface for the OpenAI API. It encapsulates all logic required to format requests, execute network calls, and parse responses specific to OpenAI.
  * @core-principles
@@ -20,6 +20,31 @@
 
 import type { IAiProvider } from './IAiProvider';
 import type { ApiKey, ApiResult, WorkOrder } from '../types';
+
+// Internal types for OpenAI API responses
+interface OpenAiErrorResponse {
+  error?: {
+    message?: string;
+    type?: string;
+    code?: string;
+  };
+}
+
+interface OpenAiSuccessResponse {
+  id: string;
+  choices?: Array<{
+    message?: {
+      role: string;
+      content?: string;
+    };
+    finish_reason?: string;
+  }>;
+  usage?: {
+    prompt_tokens: number;
+    completion_tokens: number;
+    total_tokens: number;
+  };
+}
 
 export class OpenAiProvider implements IAiProvider {
   private static readonly API_URL = 'https://api.openai.com/v1/chat/completions';
@@ -50,7 +75,8 @@ export class OpenAiProvider implements IAiProvider {
 
       // 3. Handle non-successful HTTP responses
       if (!response.ok) {
-        const errorData = await response.json();
+        // Safe cast to error response shape
+        const errorData = (await response.json()) as OpenAiErrorResponse;
         const errorMessage = errorData?.error?.message ?? `HTTP error! Status: ${response.status}`;
         return {
           success: false,
@@ -59,7 +85,8 @@ export class OpenAiProvider implements IAiProvider {
       }
 
       // 4. Process the successful response
-      const data = await response.json();
+      // Safe cast to success response shape
+      const data = (await response.json()) as OpenAiSuccessResponse;
       const content = data.choices?.[0]?.message?.content;
       const tokensUsed = data.usage?.total_tokens;
 

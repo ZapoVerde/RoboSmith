@@ -1,12 +1,15 @@
 {
-    "name": "client",
-    "version": "0.0.1",
-    "private": true,
-    "dependencies": {
-      "uuid": "^9.0.1",
-      "execa": "^8.0.1"
-    },
-    "devDependencies": {
-      "@types/uuid": "^9.0.8"
-    }
+  "name": "client",
+  "version": "0.0.1",
+  "private": true,
+  "scripts": {
+    "build": "tsc"
+  },
+  "dependencies": {
+    "uuid": "^9.0.1",
+    "execa": "^8.0.1"
+  },
+  "devDependencies": {
+    "@types/uuid": "^9.0.8"
   }
+}

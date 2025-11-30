@@ -1,20 +1,14 @@
 /**
  * @file packages/client/src/lib/ai/ApiPoolManager.ts
- * @stamp 2025-11-30T18:05:00.000Z
+ * @stamp 2025-11-30T23:00:00.000Z
  * @architectural-role Orchestrator
  * @description Implements the core stateful orchestrator for the AI Service Layer.
  * Manages the pool of `ApiKey`s, executes the "key carousel" logic, handles failover,
- * and performs durable logging of all AI transactions for the Inspector.
+ * and performs durable logging and **retrieval** of AI transactions.
  * @core-principles
  * 1. IS the single, stateful entry point for all AI requests from the application.
  * 2. OWNS the key pool, the round-robin state, and the failover logic.
- * 3. LOGS every transaction to disk for the AI Call Inspector.
- *
- * @api-declaration
- *   - export interface WorkOrder
- *   - export interface WorkerResult
- *   - export class AllApiKeysFailedError
- *   - export class ApiPoolManager
+ * 3. LOGS every transaction to disk and PROVIDES history for the Inspector.
  *
  * @contract
  *   assertions:
@@ -85,9 +79,51 @@ export class ApiPoolManager {
         await vscode.workspace.fs.createDirectory(this.logStorageUri);
       } catch (error) {
         logger.error('Failed to create AI log directory', { path: logStoragePath, error });
-        // We do not throw here; logging failure should not prevent extension startup.
         this.logStorageUri = undefined;
       }
+    }
+  }
+
+  /**
+   * Retrieves the history of AI calls from the log directory.
+   * Reads, parses, and sorts JSON files by timestamp (newest first).
+   */
+  public async getHistory(): Promise<AiCallLog[]> {
+    if (!this.logStorageUri) {
+      logger.warn('Cannot retrieve history: Log storage URI is not set.');
+      return [];
+    }
+
+    try {
+      // 1. Read directory
+      const entries = await vscode.workspace.fs.readDirectory(this.logStorageUri);
+      
+      // 2. Filter for .json files
+      const fileNames = entries
+        .filter(([name, type]) => type === vscode.FileType.File && name.endsWith('.json'))
+        .map(([name]) => name);
+
+      const logs: AiCallLog[] = [];
+
+      // 3. Read and parse each file
+      for (const name of fileNames) {
+        try {
+          const fileUri = vscode.Uri.joinPath(this.logStorageUri, name);
+          const content = await vscode.workspace.fs.readFile(fileUri);
+          const jsonString = new TextDecoder().decode(content);
+          const logEntry = JSON.parse(jsonString) as AiCallLog;
+          logs.push(logEntry);
+        } catch (error) {
+          logger.warn(`Failed to parse log file: ${name}`, { error });
+        }
+      }
+
+      // 4. Sort by timestamp descending
+      return logs.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+
+    } catch (error) {
+      logger.error('Failed to read AI call history.', { error });
+      return [];
     }
   }
 
@@ -96,12 +132,16 @@ export class ApiPoolManager {
       throw new AllApiKeysFailedError('Cannot execute request: No API keys have been configured.');
     }
 
-    // Prepare log metadata
     const callId = uuidv4();
     const startTime = Date.now();
-    // For V1 logging, we grab a preview of the context. In a real impl, we'd log the full assembled prompt.
-    const promptPreview = JSON.stringify(workOrder.context.slice(-1)[0]?.content || '(No context)');
-    const model = 'gpt-4o'; // Default for V1
+    
+    // Safety check for empty context
+    const lastSegmentContent = workOrder.context[workOrder.context.length - 1]?.content;
+    const promptPreview = typeof lastSegmentContent === 'string' 
+        ? lastSegmentContent 
+        : '(No context provided)';
+        
+    const model = 'gpt-4o';
 
     const totalKeys = this.apiKeys.length;
     let finalError: unknown;
@@ -114,7 +154,6 @@ export class ApiPoolManager {
         logger.debug(`Attempting AI call with key: ${currentKey.id}`);
         const result = await this.makeApiCall(workOrder, currentKey, workOrder.worktreePath);
         
-        // Log Success
         const durationMs = Date.now() - startTime;
         await this.logTransaction({
           callId,
@@ -126,7 +165,6 @@ export class ApiPoolManager {
             prompt: promptPreview,
           },
           response: {
-            // In V1 mock, we don't have the raw AI text here, just the payload.
             content: 'SUCCESS (Content merged into payload)', 
             durationMs,
             tokensUsed: { total: 0 },
@@ -139,26 +177,24 @@ export class ApiPoolManager {
       } catch (error) {
         finalError = error;
         if (this.isRetryableError(error)) {
-          // TYPE-GUARD-REASON: Verified instanceof Error in isRetryableError
           logger.warn(`Key ${currentKey.id} failed with a retryable error. Trying next key.`, {
             error: (error as Error).message,
           });
           continue;
         } else {
           logger.error(`AI call failed with a non-retryable error using key ${currentKey.id}.`, { error });
-          break; // Don't retry fatal errors
+          break;
         }
       }
     }
 
-    // Log Final Failure
     const durationMs = Date.now() - startTime;
     await this.logTransaction({
       callId,
       sessionId: workOrder.sessionId || 'unknown-session',
       stepName: workOrder.stepName,
       request: {
-        provider: 'openai', // Default fallback
+        provider: 'openai',
         model,
         prompt: promptPreview,
       },
@@ -170,7 +206,6 @@ export class ApiPoolManager {
       error: finalError instanceof Error ? finalError.message : String(finalError),
     });
 
-    logger.error('All API keys in the pool failed for the current request.');
     throw new AllApiKeysFailedError('The request failed with all available API keys.');
   }
 
@@ -181,7 +216,6 @@ export class ApiPoolManager {
       const timestamp = new Date().toISOString();
       const fullLog: AiCallLog = { ...logEntry, timestamp };
 
-      // Filename: ISO timestamp (sanitized) + callId
       const sanitizedTime = timestamp.replace(/[:.]/g, '-');
       const filename = `${sanitizedTime}_${logEntry.callId}.json`;
       const fileUri = vscode.Uri.joinPath(this.logStorageUri, filename);
@@ -189,7 +223,6 @@ export class ApiPoolManager {
       const content = new TextEncoder().encode(JSON.stringify(fullLog, null, 2));
       await vscode.workspace.fs.writeFile(fileUri, content);
     } catch (error) {
-      // Logging failure should not crash the app, but we log the error.
       logger.error('Failed to write AI call log.', { error });
     }
   }
@@ -207,9 +240,6 @@ export class ApiPoolManager {
   }
 
   private async makeApiCall(workOrder: WorkOrder, key: ApiKey, worktreePath: string): Promise<WorkerResult> {
-    // V1 Implementation Note: This is currently a mock simulation.
-    // In V2, this will delegate to `aiClient.generateCompletion`.
-    
     if (key.secret.includes('fail-rate-limit')) throw new Error('MOCK ERROR: Rate limit exceeded');
     if (key.secret.includes('fail-invalid')) throw new Error('MOCK ERROR: Invalid API Key');
     if (key.secret.includes('fail-server')) throw new Error('MOCK ERROR: 500 Internal Server Error');

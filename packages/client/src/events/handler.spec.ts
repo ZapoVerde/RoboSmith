@@ -1,6 +1,6 @@
 /**
  * @file packages/client/src/events/handler.spec.ts
- * @stamp 2025-11-30T15:40:00.000Z
+ * @stamp 2025-11-30T22:30:00.000Z
  * @test-target packages/client/src/events/handler.ts
  * @description
  * Verifies that the event handler correctly parses incoming messages and routes
@@ -57,10 +57,10 @@ vi.mock('../lib/logging/logger', () => ({
 import { createEventHandler, type EventHandlerContext } from './handler';
 import { settingsStore } from '../features/settings/state/SettingsStore';
 import { Orchestrator } from '../lib/workflow/Orchestrator';
-import type { Message, WorkflowManifest } from '../shared/types';
+import type { Message, WorkflowManifest, AiCallLog } from '../shared/types';
 import type { WebviewPanel } from 'vscode';
 import type { ContextPartitionerService } from '../lib/context/ContextPartitionerService';
-import type { ApiPoolManager } from '../lib/ai/ApiPoolManager';
+import type { ApiPoolManager, WorkerResult } from '../lib/ai/ApiPoolManager';
 import type { SecureStorageService } from '../lib/ai/SecureStorageService';
 import type { ApiKey } from '@shared/domain/api-key';
 import { WorktreeQueueManager } from '../lib/workflow/WorktreeQueueManager';
@@ -75,6 +75,11 @@ describe('handleEvent', () => {
   let handleEvent: (message: Message, context: EventHandlerContext) => Promise<void>;
   let mockWorktreeQueueManager: Mocked<WorktreeQueueManager>;
   let mockGitWorktreeManager: Mocked<GitWorktreeManager>;
+  
+  // Mock API Manager specifically for this test suite
+  const mockApiManager = {
+    execute: vi.fn(),
+  } as unknown as Mocked<ApiPoolManager>;
 
   const mockLoadApiKeys = vi.fn();
   const mockAddApiKey = vi.fn();
@@ -95,7 +100,7 @@ describe('handleEvent', () => {
       panel: { webview: { postMessage: mockPostMessage } } as unknown as WebviewPanel,
       manifest: {} as WorkflowManifest,
       contextService: {} as ContextPartitionerService,
-      apiManager: {} as ApiPoolManager,
+      apiManager: mockApiManager,
       worktreeQueueManager: mockWorktreeQueueManager,
       gitWorktreeManager: mockGitWorktreeManager,
     };
@@ -116,7 +121,7 @@ describe('handleEvent', () => {
     
     expect(logger.warn).toHaveBeenCalledWith(
       expect.stringContaining('Received unhandled command'),
-      { command: 'unknownCommand' } // FIX: Expect a structured object, not a string
+      { command: 'unknownCommand' }
     );
   });
 
@@ -241,5 +246,63 @@ describe('handleEvent', () => {
         cwd: mockSession.worktreePath,
       });
     });
+  });
+
+  describe('AI Call Inspector Commands', () => {
+    it('should route "rerunCall" to ApiPoolManager and return the result', async () => {
+      // Arrange
+      const modifiedRequest: AiCallLog['request'] = {
+        provider: 'openai',
+        model: 'gpt-4o',
+        prompt: 'New Prompt',
+        temperature: 0.8
+      };
+
+      const mockResult: WorkerResult = {
+        signal: 'SIGNAL:SUCCESS',
+        newPayload: [{ id: '1', type: 'AI_RESPONSE', content: 'New Response Content', timestamp: '' }]
+      };
+
+      mockApiManager.execute.mockResolvedValue(mockResult);
+
+      // Act
+      await handleEvent({ command: 'rerunCall', payload: { modifiedRequest } }, mockContext);
+
+      // Assert 1: Called execute with correct construction
+      expect(mockApiManager.execute).toHaveBeenCalledWith(expect.objectContaining({
+        context: expect.arrayContaining([
+            expect.objectContaining({ content: 'New Prompt' })
+        ]),
+        worktreePath: expect.stringContaining('mock/workspace') // Fallback path
+      }));
+
+      // Assert 2: Posted result back to WebView
+      expect(mockPostMessage).toHaveBeenCalledWith(expect.objectContaining({
+        command: 'rerunComplete',
+        payload: expect.objectContaining({
+            content: 'New Response Content'
+        })
+      }));
+    });
+
+    it('should handle "rerunCall" failure', async () => {
+        // Arrange
+        mockApiManager.execute.mockRejectedValue(new Error('API Failure'));
+  
+        // Act
+        await handleEvent({ 
+            command: 'rerunCall', 
+            payload: { modifiedRequest: { provider: 'openai', model: 'gpt-4o', prompt: 'test' } } 
+        }, mockContext);
+  
+        // Assert
+        expect(mockPostMessage).toHaveBeenCalledWith(expect.objectContaining({
+          command: 'rerunComplete',
+          payload: expect.objectContaining({
+              content: '',
+              error: 'API Failure'
+          })
+        }));
+      });
   });
 });

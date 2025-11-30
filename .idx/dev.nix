@@ -11,13 +11,14 @@
 # To learn more about how to use Nix to configure your environment
 # see: https://developers.google.com/idx/guides/customize-idx-env
 { pkgs, ... }: {
-  # Which nixpkgs channel to use.
-  channel = "stable-24.05"; # or "unstable"
+  # We use the "unstable" channel to ensure we get the latest Node.js versions
+  # (v20.19+ or v22.12+) required by modern tooling like Vite 6.
+  channel = "unstable"; 
 
   # Use https://search.nixos.org/packages to find packages
   packages = [
-    # Add the Node.js 20.x runtime. This is the foundation for our tooling.
-    pkgs.nodejs_20
+    # Upgrade to Node.js 22 to satisfy Vite 6 requirements.
+    pkgs.nodejs_22
     # Add pnpm as our designated package manager.
     pkgs.pnpm
     # Add ESLint and Prettier, which are available as Node.js packages.
