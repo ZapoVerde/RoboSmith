@@ -20,9 +20,7 @@
  *     - state_ownership: "none"
  */
 
-import { execa } from 'execa';
-// Linter fix: Changed from 'import type' to a standard import to make the
-// vscode object available as a value at runtime.
+import execa from 'execa';
 import * as vscode from 'vscode';
 import type { GitAdapter } from './IGitAdapter';
 
