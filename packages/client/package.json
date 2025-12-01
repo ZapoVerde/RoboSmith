@@ -1,3 +1,4 @@
+
 {
   "name": "client",
   "version": "0.0.1",
@@ -6,10 +7,10 @@
     "build": "tsc"
   },
   "dependencies": {
-    "uuid": "^9.0.1",
-    "execa": "^8.0.1"
+    "uuid": "^11.0.3",
+    "execa": "^5.1.1"
   },
   "devDependencies": {
-    "@types/uuid": "^9.0.8"
+    "@types/uuid": "^10.0.0"
   }
 }

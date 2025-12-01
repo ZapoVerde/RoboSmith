@@ -8,12 +8,15 @@
  * 2. OWNS the responsibility of defining the compilation scope for the `client` package source.
  */
  
- {
+ // ----- packages/client/tsconfig.json -----
+{
   "extends": "../../tsconfig.base.json",
   "include": ["src/**/*.ts"],
   "compilerOptions": {
     "outDir": "../../out",
     "rootDir": "../../",
-    "types": ["node", "vitest/globals"]
+    "types": ["node", "vitest/globals"],
+    "module": "CommonJS",
+    "moduleResolution": "Node"
   }
 }

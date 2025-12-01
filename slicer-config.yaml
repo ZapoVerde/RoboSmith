@@ -68,7 +68,7 @@ presets:
       - '**/vitest*'
       - '**/eslint*'
       - '**/*.d.ts'
-      - .ídx/**
+      - .ídx**
     exclusions:
       - package-lock.json
       - pnpm-lock.yaml
