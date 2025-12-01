@@ -43,6 +43,7 @@
       "dbaeumer.vscode-eslint"
       # Add the official Prettier extension to enable format-on-save.
       "esbenp.prettier-vscode"
+      "ms-vscode.js-debug" 
     ];
 
     # Enable previews

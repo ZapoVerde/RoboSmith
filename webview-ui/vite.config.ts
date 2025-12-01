@@ -1,12 +1,18 @@
 /**
  * @file webview-ui/vite.config.ts
- * @stamp 2025-11-30T18:41:00.000Z
+ * @stamp 2025-12-01T08:00:00.000Z
  * @architectural-role Configuration
  * @description Vite build configuration for the WebView UI.
  * @core-principles
  * 1. IS the build controller for the Svelte frontend.
  * 2. ENFORCES deterministic output filenames to ensure the Extension Host can locate assets.
  * 3. OWNS the mapping of shared path aliases for the frontend build context.
+ *
+ * @contract
+ *   assertions:
+ *     purity: pure          # Returns a static configuration object.
+ *     external_io: none     # Does not perform runtime I/O.
+ *     state_ownership: none # Stateless configuration definition.
  */
 
 import { defineConfig } from 'vite';
@@ -15,7 +21,8 @@ import { resolve } from 'path';
 
 export default defineConfig({
   plugins: [svelte({
-    configFile: 'svelte.config.js'
+    // Point to the shared config in the root (../svelte.config.mjs)
+    configFile: '../svelte.config.mjs'
   })],
   resolve: {
     alias: {

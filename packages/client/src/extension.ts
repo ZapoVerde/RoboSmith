@@ -1,11 +1,8 @@
 /**
  * @file packages/client/src/extension.ts
- * @stamp 2025-11-30T23:10:00.000Z
+ * @stamp 2025-12-01T07:30:00.000Z
  * @architectural-role Feature Entry Point
- * @description
- * The main activation entry point for the VS Code extension. It serves as the
- * **Composition Root** for the application. Its sole responsibility is to instantiate
- * core services, manage the WebView lifecycle, and wire together the Event Bus.
+ * @description The main activation entry point for the VS Code extension. It serves as the Composition Root for the application, instantiating services, wiring events, and managing the WebView lifecycle.
  * @core-principles
  * 1. IS the definitive Composition Root for the backend application.
  * 2. OWNS the instantiation and lifecycle of all singleton services and the Webview.
@@ -24,7 +21,7 @@
 
 import * as vscode from 'vscode';
 import * as path from 'path';
-import * as os from 'os'; // For platform detection
+import * as os from 'os';
 import { RealJsonRpcClient } from './lib/context/RealJsonRpcClient';
 import { logger } from './lib/logging/logger';
 import { RealGitAdapter } from './lib/git/RealGitAdapter';
@@ -50,10 +47,6 @@ import type { WorkflowViewState } from './shared/types';
 const VIEW_TYPE = 'roboSmith.mainView';
 const WEBVIEW_TITLE = 'RoboSmith Cockpit';
 
-/**
- * The main entry point for the extension, called by VS Code on activation.
- * @param context The extension context provided by VS Code.
- */
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
   logger.initialize(context.extensionMode);
   logger.info('RoboSmith extension activating...');
@@ -61,11 +54,13 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   try {
     const workspaceFolders = vscode.workspace.workspaceFolders;
     if (!workspaceFolders || workspaceFolders.length === 0) {
-      throw new Error('No workspace folder open. RoboSmith requires a project to be open.');
+      // UX IMPROVEMENT: Show an error box instead of just throwing, so the user knows why it didn't start.
+      vscode.window.showErrorMessage('RoboSmith: Please open a folder/project to start.');
+      return; 
     }
     const mainProjectRoot = workspaceFolders[0];
 
-    // --- 1. Service Instantiation (Dependency Injection) ---
+    // --- 1. Service Instantiation ---
     
     const gitAdapter = new RealGitAdapter(context);
     const processSpawner = new RealProcessSpawner();
@@ -76,8 +71,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     const apiPoolManager = ApiPoolManager.getInstance(secureStorageService);
     const workflowService = WorkflowService.getInstance();
     
-    // Real R-MCP Factory
-    // 1. Resolve Binary Path
+    // Resolve Binary Path
     const binaryPath = path.join(
       context.extensionPath,
       'packages',
@@ -86,16 +80,14 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       getBinaryName()
     );
 
-    // 2. Define Real Client Factory
     const rMcpClientFactory = (proc: ManagedProcess): JsonRpcClient => {
       return new RealJsonRpcClient(proc);
     };
 
-    // 3. Inject Path and Factory
     const rMcpServerManager = new R_Mcp_ServerManager(
       processSpawner,
       rMcpClientFactory,
-      binaryPath // Passing the path we calculated!
+      binaryPath
     );
     const contextPartitioner = ContextPartitionerService.getInstance(rMcpServerManager);
 
@@ -118,7 +110,6 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     // --- 2. Initialization ---
     await gitWorktreeManager.initialize();
     
-    // Initialize API Manager with the log path for the AI Inspector
     const logStoragePath = path.join(mainProjectRoot.uri.fsPath, '.vision', 'logs');
     await apiPoolManager.initialize(logStoragePath);
     
@@ -136,7 +127,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       currentPanel = vscode.window.createWebviewPanel(
         VIEW_TYPE,
         WEBVIEW_TITLE,
-        vscode.ViewColumn.Two,
+        vscode.ViewColumn.Two, // Open in side column by default
         {
           enableScripts: true,
           localResourceRoots: [
@@ -205,25 +196,20 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       })
     );
 
-    // --- 6. Auto-Ignition Logic (The "Reload Gap" Fix) ---
-    // Check if we have a pending workflow start from before a window reload.
+    // --- 6. Auto-Ignition Logic ---
     const pendingWorkflow = context.globalState.get<PendingWorkflowState>(StatusBarNavigatorService.PENDING_WORKFLOW_KEY);
     
     if (pendingWorkflow) {
         logger.info(`Found pending workflow ignition for session: ${pendingWorkflow.sessionId}`);
-        
-        // Clear the flag immediately so we don't loop if it crashes
         await context.globalState.update(StatusBarNavigatorService.PENDING_WORKFLOW_KEY, undefined);
 
-        // Verify we are actually in the correct worktree
         const currentRoot = mainProjectRoot.uri.fsPath;
         const activeSession = gitWorktreeManager.getAllSessions().find(s => s.sessionId === pendingWorkflow.sessionId);
 
         if (activeSession && activeSession.worktreePath === currentRoot) {
             logger.info('Worktree match confirmed. Auto-igniting Orchestrator.');
-            createOrShowWebview(); // Open the UI
+            createOrShowWebview();
 
-            // Start the engine!
             const manifest = await workflowService.loadWorkflow(mainProjectRoot.uri.fsPath).catch(() => ({}));
             
             if (currentPanel) {
@@ -254,20 +240,12 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
                 
                 void orchestrator.executeNode(pendingWorkflow.nodeId, activeSession.worktreePath);
             }
-        } else {
-            logger.warn('Pending workflow found, but current workspace does not match session path. Ignition aborted.');
         }
     }
 
-    // Standard session detection (open UI if in a session, but don't auto-run unless pending)
-    const activeSessions = gitWorktreeManager.getAllSessions();
-    const currentRoot = mainProjectRoot.uri.fsPath;
-    const isRoboSession = activeSessions.some(s => s.worktreePath === currentRoot);
-
-    if (isRoboSession && !pendingWorkflow) {
-        logger.info('Active RoboSmith session detected. Opening Cockpit.');
-        createOrShowWebview();
-    }
+    // --- 7. UX: Default Activation ---
+    // UX CHANGE: Always open the interface on load so the user knows it's working.
+    createOrShowWebview();
 
     logger.info('RoboSmith extension activated successfully.');
 
@@ -321,7 +299,6 @@ function getNonce() {
 
 function getBinaryName(): string {
   const platform = os.platform();
-  // We only support Linux right now since that's what we built
   if (platform === 'linux') {
     return 'roberto-mcp-linux-x64';
   }

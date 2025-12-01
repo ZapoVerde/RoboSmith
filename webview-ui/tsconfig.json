@@ -10,8 +10,8 @@
  */
  {
   "extends": "../tsconfig.base.json",
-  "include": ["src/**/*.ts"],
+  "include": ["src/**/*.ts", "src/**/*.svelte"],
   "compilerOptions": {
-    "types": ["node", "vitest/globals"]
+    "types": ["node", "vitest/globals", "svelte"]
   }
 }

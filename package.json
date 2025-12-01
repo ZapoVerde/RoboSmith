@@ -1,9 +1,36 @@
 {
   "name": "robosmith-extension",
+  "publisher": "robosmith",
   "version": "0.0.1",
   "description": "RoboSmith VS Code Extension",
   "private": true,
   "main": "./out/packages/client/src/extension.js",
+  "engines": {
+    "vscode": "^1.95.0"
+  },
+  "extensionKind": [
+    "workspace"
+  ],
+  "activationEvents": [
+    "onStartupFinished",
+    "onWorkspaceContains:.vision/workflows.json"
+  ],
+  "contributes": {
+    "commands": [
+      {
+        "command": "roboSmith.showNavigator",
+        "title": "RoboSmith: Show Navigator"
+      },
+      {
+        "command": "roboSmith.openCockpit",
+        "title": "RoboSmith: Open Cockpit"
+      },
+      {
+        "command": "roboSmith.showAiCallInspector",
+        "title": "RoboSmith: Show AI Call Inspector"
+      }
+    ]
+  },
   "scripts": {
     "build": "run-p build:client build:webview",
     "build:client": "pnpm --filter client build",

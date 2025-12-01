@@ -1,15 +1,20 @@
 /**
  * @file packages/client/src/lib/context/ContextPartitionerService.spec.ts
- * @stamp S-20251106T154021Z-V-DI-COMPLIANT
+ * @stamp 2025-12-01T07:30:00.000Z
  * @test-target packages/client/src/lib/context/ContextPartitionerService.ts
  * @description
  * Verifies the contract of the refactored, dependency-injected
  * ContextPartitionerService. This suite uses a mock R_Mcp_ServerManager
  * to ensure the service correctly routes queries and handles success/failure
  * responses from the RPC client in isolation.
- * @criticality
- * The test target is CRITICAL as it is a high fan-out orchestrator of core business logic.
+ * @criticality CRITICAL
  * @testing-layer Unit
+ * 
+ * @contract
+ *   assertions:
+ *     purity: pure # Mocks the R_Mcp_ServerManager dependency.
+ *     external_io: none
+ *     state_ownership: none
  */
 
 // --- HOISTING-SAFE MOCKS ---
@@ -45,7 +50,8 @@ describe('ContextPartitionerService (Stateless Façade)', () => {
         const mockClientFactoryStub = (() => mockClient) as JsonRpcClientFactory;
 
         // Instantiate the dependency with the type-safe stubs.
-        mockServerManager = new R_Mcp_ServerManager(mockSpawnerStub, mockClientFactoryStub) as Mocked<R_Mcp_ServerManager>;
+        // FIX: Added '/mock/binary/path' as the 3rd argument to satisfy the updated constructor signature
+        mockServerManager = new R_Mcp_ServerManager(mockSpawnerStub, mockClientFactoryStub, '/mock/binary/path') as Mocked<R_Mcp_ServerManager>;
       
         // Mock the specific method on the dependency that our service-under-test will call.
         mockServerManager.getClientFor = vi.fn().mockReturnValue(mockClient);

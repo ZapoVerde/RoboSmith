@@ -11,13 +11,9 @@
  * 3. MUST NOT contain specific test configuration logic (delegates to member configs).
  */
 
-import { defineConfig } from 'vitest/config';
+import { defineWorkspace } from 'vitest/config';
 
-export default defineConfig({
-  test: {
-    projects: [
-      './vitest.config.node.mts',
-      './vitest.config.browser.mts',
-    ],
-  },
-});
+export default defineWorkspace([
+  './vitest.config.node.mts',
+  './vitest.config.browser.mts',
+]);

@@ -1,14 +1,20 @@
 /**
  * @file webview-ui/src/App.spec.ts
- * @stamp 2025-11-30T21:40:00.000Z
+ * @stamp 2025-12-01T07:45:00.000Z
  * @test-target webview-ui/src/App.svelte
- * @description Verifies the view-switching logic of the root App component, including the new AI Call Inspector view.
+ * @description Verifies view switching. Uses data-testid for reliability.
  * @criticality Not Critical (UI Composition).
  * @testing-layer Integration
+ *
+ * @contract
+ *   assertions:
+ *     purity: mutates          # Renders to JSDOM.
+ *     external_io: none        # Simulates window events.
+ *     state_ownership: none
  */
 
-import { describe, it, expect, vi } from 'vitest';
-import { render, screen, act } from '@testing-library/svelte';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { render, screen, act, waitFor } from '@testing-library/svelte';
 import App from './App.svelte';
 import type { 
   WorkflowViewState, 
@@ -16,22 +22,23 @@ import type {
   AiCallLog 
 } from '../../packages/client/src/shared/types';
 
-// Mock child components to keep test focused on routing.
-// We use a standard function to satisfy Svelte runtime requirements for mocked components.
-vi.mock('./components/MissionControlPanel.svelte', () => ({
-  default: function() { return {}; }
-}));
-vi.mock('./components/IntegrationPanel.svelte', () => ({
-  default: function() { return {}; }
-}));
-vi.mock('./components/AiCallInspector.svelte', () => ({
-  default: function() { return {}; }
+// Global Stub
+const mockPostMessage = vi.fn();
+vi.stubGlobal('acquireVsCodeApi', () => ({
+  postMessage: mockPostMessage,
+  getState: () => ({}),
+  setState: () => {}
 }));
 
 describe('App Controller', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    document.body.innerHTML = '';
+  });
+
   it('should render Lobby by default', () => {
     render(App);
-    expect(screen.getByText('🤖 RoboSmith')).toBeInTheDocument();
+    expect(screen.getByTestId('lobby-view')).toBeInTheDocument();
   });
 
   it('should switch to MissionControl on workflowStateUpdate', async () => {
@@ -54,8 +61,14 @@ describe('App Controller', () => {
       }));
     });
 
-    // Lobby should disappear
-    expect(screen.queryByText('Waiting for a workflow to start...')).not.toBeInTheDocument();
+    // Wait for Lobby to disappear
+    await waitFor(() => {
+      expect(screen.queryByTestId('lobby-view')).not.toBeInTheDocument();
+    });
+    
+    // Check that MissionControl loaded (it renders a div with class .mission-control)
+    const mc = document.querySelector('.mission-control');
+    expect(mc).toBeInTheDocument();
   });
 
   it('should switch to Integration on taskReadyForIntegration', async () => {
@@ -65,7 +78,7 @@ describe('App Controller', () => {
       sessionId: 's1',
       branchName: 'b1',
       commitMessage: 'msg',
-      changedFiles: []
+      changedFiles: ['file.ts']
     };
 
     await act(() => {
@@ -77,7 +90,11 @@ describe('App Controller', () => {
       }));
     });
 
-    expect(screen.queryByText('Waiting for a workflow to start...')).not.toBeInTheDocument();
+    await waitFor(() => {
+      expect(screen.queryByTestId('lobby-view')).not.toBeInTheDocument();
+    });
+
+    expect(screen.getByText('Task Complete')).toBeInTheDocument();
   });
 
   it('should switch to AiCallInspector on showAiCallInspector', async () => {
@@ -94,6 +111,10 @@ describe('App Controller', () => {
       }));
     });
 
-    expect(screen.queryByText('Waiting for a workflow to start...')).not.toBeInTheDocument();
+    await waitFor(() => {
+      expect(screen.queryByTestId('lobby-view')).not.toBeInTheDocument();
+    });
+
+    expect(screen.getByText('History')).toBeInTheDocument();
   });
 });
