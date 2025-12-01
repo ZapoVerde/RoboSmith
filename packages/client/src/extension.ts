@@ -1,22 +1,12 @@
 /**
  * @file packages/client/src/extension.ts
- * @stamp 2025-12-01T07:30:00.000Z
+ * @stamp 2025-12-01T11:00:00.000Z
  * @architectural-role Feature Entry Point
- * @description The main activation entry point for the VS Code extension. It serves as the Composition Root for the application, instantiating services, wiring events, and managing the WebView lifecycle.
+ * @description The main activation entry point for the VS Code extension.
  * @core-principles
  * 1. IS the definitive Composition Root for the backend application.
- * 2. OWNS the instantiation and lifecycle of all singleton services and the Webview.
- * 3. DELEGATES all feature-specific logic to dedicated service classes.
- *
- * @api-declaration
- *   - export async function activate(context: vscode.ExtensionContext): Promise<void>
- *   - export function deactivate(): void
- *
- * @contract
- *   assertions:
- *     purity: mutates       # Mutates global state (VS Code UI, Singletons).
- *     external_io: vscode   # Interacts with VS Code APIs at the top level.
- *     state_ownership: none # Does not own application state; creates the owners.
+ * 2. OWNS the instantiation and lifecycle of all singleton services.
+ * 3. LOGS verbose checkpoints to the Debug Console to diagnose activation stalls.
  */
 
 import * as vscode from 'vscode';
@@ -48,19 +38,22 @@ const VIEW_TYPE = 'roboSmith.mainView';
 const WEBVIEW_TITLE = 'RoboSmith Cockpit';
 
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
+  // [DEBUG] Checkpoint 0: Entry
+  console.log('[RoboSmith] Extension activation started.'); 
+  
   logger.initialize(context.extensionMode);
   logger.info('RoboSmith extension activating...');
 
   try {
     const workspaceFolders = vscode.workspace.workspaceFolders;
     if (!workspaceFolders || workspaceFolders.length === 0) {
-      // UX IMPROVEMENT: Show an error box instead of just throwing, so the user knows why it didn't start.
       vscode.window.showErrorMessage('RoboSmith: Please open a folder/project to start.');
       return; 
     }
     const mainProjectRoot = workspaceFolders[0];
 
     // --- 1. Service Instantiation ---
+    console.log('[RoboSmith] Instantiating services...');
     
     const gitAdapter = new RealGitAdapter(context);
     const processSpawner = new RealProcessSpawner();
@@ -108,11 +101,14 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     );
 
     // --- 2. Initialization ---
+    console.log('[RoboSmith] Initializing GitWorktreeManager...');
     await gitWorktreeManager.initialize();
     
+    console.log('[RoboSmith] Initializing ApiPoolManager...');
     const logStoragePath = path.join(mainProjectRoot.uri.fsPath, '.vision', 'logs');
     await apiPoolManager.initialize(logStoragePath);
     
+    console.log('[RoboSmith] Initializing Status Bar...');
     statusBarNavigator.initialize(mainProjectRoot);
 
     // --- 3. Webview Management ---
@@ -127,7 +123,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       currentPanel = vscode.window.createWebviewPanel(
         VIEW_TYPE,
         WEBVIEW_TITLE,
-        vscode.ViewColumn.Two, // Open in side column by default
+        vscode.ViewColumn.Two, 
         {
           enableScripts: true,
           localResourceRoots: [
@@ -170,6 +166,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     };
 
     // --- 5. Command Registration ---
+    console.log('[RoboSmith] Registering commands...');
 
     context.subscriptions.push(
       vscode.commands.registerCommand('roboSmith.openCockpit', () => {
@@ -197,6 +194,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     );
 
     // --- 6. Auto-Ignition Logic ---
+    console.log('[RoboSmith] Checking auto-ignition state...');
     const pendingWorkflow = context.globalState.get<PendingWorkflowState>(StatusBarNavigatorService.PENDING_WORKFLOW_KEY);
     
     if (pendingWorkflow) {
@@ -244,13 +242,15 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     }
 
     // --- 7. UX: Default Activation ---
-    // UX CHANGE: Always open the interface on load so the user knows it's working.
+    console.log('[RoboSmith] Opening default view...');
     createOrShowWebview();
 
     logger.info('RoboSmith extension activated successfully.');
+    console.log('[RoboSmith] Activation complete.');
 
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : String(error);
+    console.error('[RoboSmith] Activation FAILED:', errorMessage);
     logger.error(`Failed to activate RoboSmith extension: ${errorMessage}`);
     vscode.window.showErrorMessage(`RoboSmith failed to start: ${errorMessage}`);
   }

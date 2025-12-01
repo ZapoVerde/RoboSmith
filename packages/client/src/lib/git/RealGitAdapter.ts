@@ -20,7 +20,6 @@
  *     - state_ownership: "none"
  */
 
-import execa from 'execa';
 import * as vscode from 'vscode';
 import type { GitAdapter } from './IGitAdapter';
 
@@ -31,11 +30,89 @@ export class RealGitAdapter implements GitAdapter {
     args: string[],
     options: { cwd: string }
   ): Promise<{ stdout: string; stderr: string }> {
-    const result = await execa('git', args, options);
-    return {
-      stdout: result.stdout,
-      stderr: result.stderr,
+    const commandString = `git ${args.map((a) => `"${a}"`).join(' ')}`;
+
+    const shellExecution = new vscode.ShellExecution(commandString, {
+      cwd: options.cwd,
+    });
+
+    const taskDefinition: vscode.TaskDefinition = {
+      type: 'robosmith-git',
+      script: 'git',
     };
+
+    const task = new vscode.Task(
+      taskDefinition,
+      vscode.TaskScope.Workspace,
+      'Git Operation',
+      'RoboSmith',
+      shellExecution
+    );
+
+    // CRITICAL: Force the terminal to open so you see auth prompts
+    task.presentationOptions = {
+      reveal: vscode.TaskRevealKind.Always,
+      focus: true,
+      panel: vscode.TaskPanelKind.Shared,
+      showReuseMessage: false,
+      clear: true,
+    };
+
+    try {
+      // 60s timeout to prevent infinite hangs
+      const exitCode = await this.runTaskWithTimeout(task, 60000);
+
+      if (exitCode !== 0) {
+        throw new Error(
+          `Git command failed with exit code ${exitCode}. Check the "RoboSmith" terminal.`
+        );
+      }
+
+      // Tasks don't return stdout, but success (exitCode 0) is enough for our logic.
+      return { stdout: '', stderr: '' };
+    } catch (error) {
+      vscode.window.showErrorMessage('RoboSmith Git operation failed. Check the Terminal.');
+      throw error;
+    }
+  }
+
+  private runTaskWithTimeout(task: vscode.Task, timeoutMs: number): Promise<number> {
+    return new Promise((resolve, reject) => {
+      let disposable: vscode.Disposable;
+      let timer: NodeJS.Timeout;
+
+      // 1. Setup Timeout
+      timer = setTimeout(() => {
+        disposable?.dispose();
+        reject(new Error(`Git operation timed out. Please check the terminal for authentication prompts.`));
+      }, timeoutMs);
+
+      // 2. Setup Listener
+      disposable = vscode.tasks.onDidEndTaskProcess((e) => {
+        if (
+          e.execution.task.definition.type === task.definition.type &&
+          e.execution.task.name === task.name &&
+          e.execution.task.source === task.source
+        ) {
+          clearTimeout(timer);
+          disposable.dispose();
+          resolve(e.exitCode ?? 0);
+        }
+      });
+
+      // 3. Start Execution
+      // Fix: Use .then(null, onRejected) to handle errors on Thenable types without .catch
+      vscode.tasks.executeTask(task).then(
+        () => {
+          // Task execution started (process not finished yet)
+        },
+        (err: unknown) => {
+          clearTimeout(timer);
+          disposable.dispose();
+          reject(err);
+        }
+      );
+    });
   }
 
   public async readDirectory(uri: vscode.Uri): Promise<[string, vscode.FileType][]> {
