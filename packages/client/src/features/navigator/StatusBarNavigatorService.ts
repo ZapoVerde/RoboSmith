@@ -1,16 +1,28 @@
 /**
  * @file packages/client/src/features/navigator/StatusBarNavigatorService.ts
- * @stamp 2025-11-30T16:00:00.000Z
+ * @stamp 2025-12-01T13:17:00.000Z
  * @architectural-role Feature Entry Point
- * @description
- * Encapsulates logic for the Status Bar Navigator. Now integrated with the
- * WorktreeQueueManager to enforce safety and the ExtensionContext to persist
- * "Pending Start" state across window reloads.
+ * @description Manages the Status Bar UI for context switching and new workflow creation. It acts as the primary user entry point for the multi-root workspace system, ensuring safe transitions between the main project and ephemeral worktrees.
  * @core-principles
- * 1. OWNS the UI for navigation and new task creation.
- * 2. DELEGATES task creation to the WorktreeQueueManager (not the raw Manager).
- * 3. PERSISTS intent to `globalState` before triggering a workspace switch.
+ * 1. IS the singleton entry point for user navigation commands.
+ * 2. OWNS the state of the Status Bar item and the Quick Pick navigation menu.
+ * 3. ORCHESTRATES the safe transition between workspace folders, enforcing existence checks before switching.
+ * 4. DELEGATES actual worktree creation and queue management to `WorktreeQueueManager`.
+ *
+ * @api-declaration
+ *   - export interface INavigatorDependencies
+ *   - export interface PendingWorkflowState
+ *   - export class StatusBarNavigatorService
+ *     - constructor(...)
+ *     - public initialize(mainProjectRoot: vscode.WorkspaceFolder): void
+ *
+ * @contract
+ *   assertions:
+ *     purity: mutates          # Mutates VS Code UI (Status Bar) and Workspace State.
+ *     external_io: vscode      # Heavily relies on VS Code Window and Workspace APIs.
+ *     state_ownership: ['statusBarItem'] # Owns the UI handle for the indicator.
  */
+
 
 import * as vscode from 'vscode';
 import type { GitWorktreeManager, WorktreeSession } from '../../lib/git/GitWorktreeManager';
@@ -18,7 +30,7 @@ import type { WorktreeQueueManager } from '../../lib/workflow/WorktreeQueueManag
 import { logger } from '../../lib/logging/logger';
 
 interface NavigatorItem extends vscode.QuickPickItem {
-  id: string; // 'main', 'createNew', or a sessionId
+  id: string;
 }
 
 export interface INavigatorDependencies {
@@ -98,15 +110,12 @@ export class StatusBarNavigatorService {
   }
 
   private async createNewWorkflow(): Promise<void> {
-    // 1. Prompt for Task Name
     const taskName = await this.deps.window.showInputBox({
       prompt: 'Enter a name for the new workflow',
       validateInput: text => (text.trim().length > 0 ? null : 'Name cannot be empty.'),
     });
     if (!taskName) return;
 
-    // 2. Prompt for Mode
-    // FIX: Explicitly type the items as NavigatorItem[] to ensure 'id' is known.
     const modes: NavigatorItem[] = [
       { label: 'Autonomous Mode', description: 'Run continuously (Default)', picked: true, id: 'auto' },
       { label: 'Stepper Mode', description: 'Pause for approval before every step', id: 'manual' }
@@ -118,13 +127,11 @@ export class StatusBarNavigatorService {
     const isManualApprovalMode = modeSelection.id === 'manual';
 
     try {
-      // 3. Submit to Queue
       const session = await this.worktreeQueueManager.submitTask({
         baseBranch: 'main',
         changePlan: [], 
       });
 
-      // 4. Persist "Ignition" State
       const pendingState: PendingWorkflowState = {
         sessionId: session.sessionId,
         nodeId: 'Implement',
@@ -134,11 +141,12 @@ export class StatusBarNavigatorService {
 
       logger.info(`Workflow queued and ready. Switching to worktree: ${session.sessionId}`);
 
-      // 5. Switch Workspace
       await this.switchWorkspace(vscode.Uri.file(session.worktreePath));
 
     } catch (error) {
       logger.error('Failed to create or queue new workflow.', { error });
+      // Clean up pending state if we failed
+      await this.context.globalState.update(StatusBarNavigatorService.PENDING_WORKFLOW_KEY, undefined);
     }
   }
 
@@ -174,9 +182,21 @@ export class StatusBarNavigatorService {
 
   private async switchWorkspace(targetUri: vscode.Uri): Promise<void> {
     try {
+      // 🛡️ SAFETY SHIELD 🛡️
+      // Ensure the directory actually exists before switching.
+      // This prevents the "blank screen of death" loop.
+      try {
+        await vscode.workspace.fs.stat(targetUri);
+      } catch (e) {
+        const msg = `Cannot switch: Directory not found at ${targetUri.fsPath}`;
+        logger.error(msg);
+        vscode.window.showErrorMessage("Aborting switch: The worktree folder was not created successfully.");
+        return; // <--- The most important line. We stop here if the folder is missing.
+      }
+
       const folders = vscode.workspace.workspaceFolders;
       await this.deps.workspace.updateWorkspaceFolders(0, folders ? folders.length : 0, { uri: targetUri });
-      this.updateStatusText(); // Optimistic update
+      this.updateStatusText(); 
     } catch (error) {
       logger.error('Failed to switch workspace.', { error, targetUri: targetUri.fsPath });
     }
@@ -197,7 +217,6 @@ export class StatusBarNavigatorService {
     if (activeSession) {
         this.statusBarItem.text = `🤖 RoboSmith: ${activeSession.branchName}`;
     } else {
-        // Fallback if we are in a folder but it's not a managed session
         this.statusBarItem.text = '🤖 RoboSmith: (Unknown Context)';
     }
   }
